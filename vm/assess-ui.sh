@@ -36,7 +36,11 @@ set -euo pipefail
 # derived by this script. Keys used:
 #   install.war                  WAR filename to download and unzip
 #   install.app.context.path     URL path and dir name -> ${WEB_ROOT}/<ctx>, /<ctx>
-#   install.web.root             nginx static root holding the per-app dirs
+#   install.web.root             OPTIONAL. nginx static root holding the per-app
+#                                dirs; defaults to /var/www/app, the dir the
+#                                tomcat-nginx-mysql image bakes for this. Set it
+#                                only to serve from somewhere the image does not
+#                                prepare — see DEFAULT_WEB_ROOT below.
 #
 # NOTE — keys that are NO LONGER read, and the file that is no longer installed:
 #   install.catalina.home        Tomcat home; meaningless now that nginx serves
@@ -99,6 +103,18 @@ readonly NGINX_GROUP="www-data"
 # <ctx>.conf — and never touches the server block itself.
 readonly NGINX_APP_D="/etc/nginx/app.d"
 
+# Fallback for install.web.root — the static root the tomcat-nginx-mysql image
+# bakes (empty, www-data-owned) for exactly this purpose. It is the PARENT that
+# holds the per-app dirs, not one app's dir: this script installs into
+# ${WEB_ROOT}/<ctx>, so both apps share the root and differ by context path.
+#
+# It stays overridable rather than hardcoded because install.properties is this
+# deploy's single source of truth; the default only spares every app from
+# restating the one value the image already guarantees. Overriding it means
+# pre-creating that dir on the VM with www-data able to traverse it — nothing
+# outside this path is created or chowned by the image.
+readonly DEFAULT_WEB_ROOT="/var/www/app"
+
 # Base GCS location that holds per-environment release artifacts. The install/
 # folder and the WAR for this deploy live under
 # ${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/.
@@ -148,6 +164,23 @@ require_prop() {
   if [[ -z "$__val" ]]; then
     echo "ERROR: required key '${__key}' not set in ${INSTALL_PROPS}." >&2
     exit 1
+  fi
+  printf -v "$__var" '%s' "$__val"
+}
+
+# default_prop <var> <key> <default>: read an optional key, falling back to the
+# default when it is absent or empty. The fallback is announced, so a deploy log
+# always shows which value was used and whether it came from the file.
+#
+# Use this ONLY where the default is a path the image itself bakes — the value
+# still gets the same validation as a supplied one, so the guard does not go dead
+# just because the key was omitted.
+default_prop() {
+  local __var="$1" __key="$2" __default="$3" __val
+  __val="$(read_prop "$__key")"
+  if [[ -z "$__val" ]]; then
+    echo "Key '${__key}' not set; using image default: ${__default}"
+    __val="$__default"
   fi
   printf -v "$__var" '%s' "$__val"
 }
@@ -224,12 +257,16 @@ download_install() {
 load_props() {
   require_prop APP_WAR_FILE      'install.war'
   require_prop CONTEXT_PATH      'install.app.context.path'
-  require_prop WEB_ROOT          'install.web.root'
+  default_prop WEB_ROOT          'install.web.root' "$DEFAULT_WEB_ROOT"
 
   # Guard the two values that get interpolated into paths we rm -rf and into the
   # generated nginx config. A context path containing a slash would both escape
   # ${WEB_ROOT} and produce a location block that does not mean what it looks
   # like; an empty-ish web root would aim the swap at /.
+  #
+  # The web-root check runs on the defaulted value too, not just a supplied one:
+  # it is the standing statement of what this variable may ever hold, and it must
+  # not become dead code the day the key is omitted everywhere.
   if [[ ! "$CONTEXT_PATH" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
     echo "ERROR: install.app.context.path must be a bare name matching" >&2
     echo "  [A-Za-z0-9][A-Za-z0-9._-]* (no slashes); got: '${CONTEXT_PATH}'" >&2
