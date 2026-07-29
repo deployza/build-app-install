@@ -1,6 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
+# TEMPORARY: this installer is disabled — do nothing and return successfully.
+# Remove this block to restore the original behaviour (everything below is intact).
+# echo "assess-install.sh: temporarily disabled, skipping install."
+# exit 0
+
 # -----------------------------------------------------------------------------
 # assess-install.sh — ORCHESTRATOR. This is the <APP_NAME>.sh that vm-startup.sh
 # clones and runs as a child at boot (APP_NAME="assess-install"). It does NOT
