@@ -8,7 +8,16 @@ set -euo pipefail
 # the WAR from GCS, provisions the MySQL DB/user, installs the per-webapp Tomcat
 # context (context.xml + properties + logback) into
 # $CATALINA_HOME/conf/Catalina/localhost, and hot-deploys the WAR into the
-# already-running Tomcat.
+# already-running Tomcat, then writes the nginx routing drop-in that proxies
+# /<ctx>/ to Tomcat and reloads nginx.
+#
+# On the tomcat-nginx-mysql image nginx owns :80 and Tomcat is only reachable on
+# 127.0.0.1:8080. That image bakes /etc/nginx/app.d/ EMPTY on purpose — every
+# path except /nginx-health 404s until an app deploy script drops its own
+# location blocks in. Deploying the WAR alone therefore yields a working
+# :8080/<ctx> and a 404 on :80/<ctx>; write_nginx_conf is what closes that gap.
+# See build-vm-images/scripts/ubuntu/install-nginx.sh and, on the VM itself,
+# /etc/nginx/app.d/README.
 #
 # Contract: invoked as `assess-server.sh APP_ENV` (by assess-install.sh).
 # APP_NAME is fixed to "assess-server" here (the backend's GCS artifacts live
@@ -45,6 +54,10 @@ set -euo pipefail
 #   install.app.db.password      app DB user password
 #   install.mysql.root.user      MySQL admin user (to provision the app DB/user)
 #   install.mysql.root.password  MySQL admin password ("" => passwordless socket)
+#
+# The nginx drop-in is GENERATED, not downloaded: its content is fully determined
+# by CONTEXT_PATH, which we already have, so it needs no key of its own and no
+# edit to the GCS install/ folder.
 #
 # Config model: the app no longer reads -Dconfig.dir/-Dlogs.dir (those were
 # dropped from setenv.sh). Instead <ctx>.xml is installed as
@@ -92,6 +105,13 @@ readonly TOMCAT_SERVICE="tomcat"
 readonly TOMCAT_USER="tomcat"
 readonly TOMCAT_GROUP="tomcat"
 
+# The nginx service fronting Tomcat on :80, and the routing seam the
+# tomcat-nginx-mysql image bakes EMPTY: its :80 server block does
+# `include /etc/nginx/app.d/*.conf;`, so a file dropped here adds this app's
+# routing without touching the baked config.
+readonly NGINX_SERVICE="nginx"
+readonly NGINX_APP_D="/etc/nginx/app.d"
+
 # Base GCS location that holds per-environment release artifacts. The install/
 # folder and the WAR for this deploy live under
 # ${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/.
@@ -126,6 +146,7 @@ TMP_WAR=""              # ${STAGE_DIR}/${APP_WAR_FILE}  (real versioned name)
 WAR_URI=""              # GCS URI of the WAR
 WAR_PATH=""             # ${TOMCAT_WEBAPPS}/${CONTEXT_PATH}.war (deployed name)
 EXPLODED_DIR=""         # ${TOMCAT_WEBAPPS}/${CONTEXT_PATH}     (Tomcat-exploded)
+NGINX_CONF=""           # ${NGINX_APP_D}/${CONTEXT_PATH}.conf   (routing drop-in)
 
 # =============================================================================
 # Functions
@@ -210,6 +231,15 @@ load_props() {
   # root password), and the -p flag is then omitted below.
   MYSQL_ROOT_PASSWORD="$(read_prop 'install.mysql.root.password')"
 
+  # CONTEXT_PATH is interpolated into the generated nginx location blocks as well
+  # as into Tomcat paths. A value containing a slash would produce a location that
+  # does not mean what it looks like, so require a bare name.
+  if [[ ! "$CONTEXT_PATH" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "ERROR: install.app.context.path must be a bare name matching" >&2
+    echo "  [A-Za-z0-9][A-Za-z0-9._-]* (no slashes); got: '${CONTEXT_PATH}'" >&2
+    exit 1
+  fi
+
   # Tomcat locations derived from CATALINA_HOME.
   TOMCAT_WEBAPPS="${CATALINA_HOME}/webapps"
   CATALINA_LOCALHOST="${CATALINA_HOME}/conf/Catalina/localhost"
@@ -227,6 +257,10 @@ load_props() {
   WAR_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/${APP_WAR_FILE}"
   WAR_PATH="${TOMCAT_WEBAPPS}/${CONTEXT_PATH}.war"
   EXPLODED_DIR="${TOMCAT_WEBAPPS:?}/${CONTEXT_PATH}"
+
+  # This app's nginx routing drop-in. Named after the context so each app owns
+  # exactly one file in the shared dir and a redeploy overwrites its own.
+  NGINX_CONF="${NGINX_APP_D}/${CONTEXT_PATH}.conf"
 }
 
 # verify_install_files: fail early if any file install.properties named is
@@ -375,6 +409,66 @@ deploy_war() {
   fi
 }
 
+# write_nginx_conf: generate this app's routing drop-in, proxying /<ctx>/ to
+# Tomcat. Per the app.d contract (see /etc/nginx/app.d/README) the file holds
+# ONLY location blocks — it is included INSIDE the baked :80 server{} block, so a
+# server{} wrapper here would be a syntax error.
+#
+# The proxy boilerplate is not repeated: snippets/proxy-to-tomcat.conf is baked by
+# install-nginx.sh and carries proxy_pass to the tomcat upstream plus the
+# X-Forwarded-* headers that Tomcat's RemoteIpValve reads. Including it keeps
+# those headers defined in one place for every app on the box.
+#
+# The prefix is /<ctx>/ WITH a trailing slash and proxy_pass has no URI part, so
+# nginx forwards the original path unchanged — Tomcat still sees /<ctx>/... and
+# matches its own context. The exact-match /<ctx> block exists because the bare
+# path does not match the /<ctx>/ prefix location; without it, a request to
+# /<ctx> would 404 at nginx even though Tomcat serves it.
+write_nginx_conf() {
+  echo "Writing nginx routing drop-in ${NGINX_CONF}..."
+
+  cat >"$NGINX_CONF" <<EOF
+# ${APP_NAME} — generated by build-app-install/vm/${APP_NAME}.sh. Do not edit by
+# hand: the next deploy overwrites this file. Location blocks only (this is
+# included inside the :80 server block baked by install-nginx.sh).
+
+# Bare /${CONTEXT_PATH} does not match the /${CONTEXT_PATH}/ prefix below; send it
+# to the canonical trailing-slash form rather than letting it 404.
+location = /${CONTEXT_PATH} {
+    return 301 /${CONTEXT_PATH}/;
+}
+
+location /${CONTEXT_PATH}/ {
+    include snippets/proxy-to-tomcat.conf;
+}
+EOF
+
+  chmod 644 "$NGINX_CONF"
+}
+
+# reload_nginx: validate the whole config, then reload.
+#
+# `nginx -t` first, and treated as fatal: a reload with a broken config leaves the
+# old workers running, so nginx would keep serving the PREVIOUS routing while
+# reporting success. The test covers every app.d drop-in, so a sibling app's
+# broken file fails this too — correct, since the reload would not have applied
+# either way.
+#
+# reload (SIGHUP), not restart: it re-reads config and cycles workers without
+# dropping connections or a window where :80 is unbound.
+reload_nginx() {
+  echo "Validating nginx configuration..."
+  if ! nginx -t; then
+    echo "ERROR: nginx -t failed; not reloading. The ${CONTEXT_PATH} WAR is deployed" >&2
+    echo "  to Tomcat but nginx is not routing to it. Fix the config above and run:" >&2
+    echo "    sudo nginx -t && sudo systemctl reload ${NGINX_SERVICE}" >&2
+    exit 1
+  fi
+
+  echo "Reloading ${NGINX_SERVICE}..."
+  systemctl reload "$NGINX_SERVICE"
+}
+
 # =============================================================================
 # Main
 # =============================================================================
@@ -402,8 +496,21 @@ main() {
                         # the new WAR picks it up
   deploy_war
 
-  echo "Deployment complete."
-  echo "App should be available at: /${CONTEXT_PATH}"
+  # nginx routing, only where nginx is actually the front door. Unlike
+  # assess-exam.sh — which cannot serve anything without nginx and so demands it —
+  # this app is fully functional on the plain tomcat / tomcat-mysql flavors, where
+  # Tomcat owns :8080 directly and there is no app.d seam to write into. Treat the
+  # dir's absence as "this host has no proxy", not as an error.
+  if [[ -d "$NGINX_APP_D" ]] && command -v nginx >/dev/null 2>&1; then
+    write_nginx_conf
+    reload_nginx
+    echo "Deployment complete."
+    echo "App should be available at: http://<host>/${CONTEXT_PATH}/ (via nginx)"
+  else
+    echo "No ${NGINX_APP_D} and/or no nginx on this host — skipping nginx routing."
+    echo "Deployment complete."
+    echo "App should be available at: http://<host>:8080/${CONTEXT_PATH}/ (Tomcat direct)"
+  fi
 }
 
 main "$@"
