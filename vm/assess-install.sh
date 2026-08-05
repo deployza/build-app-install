@@ -9,16 +9,29 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # assess-install.sh — ORCHESTRATOR. This is the <APP_NAME>.sh that vm-startup.sh
 # clones and runs as a child at boot (APP_NAME="assess-install"). It does NOT
-# deploy anything itself; it installs all three assess apps onto the same Tomcat
-# instance by invoking, in order:
+# deploy anything itself; it installs every app that belongs on this VM by
+# invoking, in order:
 #
 #   1. assess-server.sh    the assess backend WAR (DB + app.properties + logback)
 #   2. assess-ui.sh        the static UI WAR
 #   3. assess-exam.sh      the exam WAR
+#   4. ziniapps-go.sh      go.ziniapps.com   landing page  (per-HOST site)
+#   5. ziniapps-www.sh     www.ziniapps.com  marketing site (per-HOST site)
 #
-# Each child is a self-contained deploy script with its own install.properties,
-# context path, and GCS artifacts. They run against the same live Tomcat, so
-# each hot-deploys its own context (/<ctx>) without touching the others.
+# Each child is a self-contained deploy script with its own install.properties
+# and GCS artifacts. The first three are per-PATH apps sharing the live Tomcat
+# and the image's default nginx server block, so each hot-deploys its own
+# context (/<ctx>) without touching the others. The last two are per-HOST static
+# sites: they serve a domain root via their own nginx server block in
+# /etc/nginx/site.d/ rather than a path prefix in /etc/nginx/app.d/.
+#
+# ORDERING IS LOAD-BEARING for the two site scripts, though only in one
+# direction: ziniapps-go.sh's server block does `include /etc/nginx/app.d/*.conf`
+# so that go.ziniapps.com keeps serving /assess-ui/ etc. That include is resolved
+# by nginx at reload time, not at write time, so the assess drop-ins do not
+# strictly have to exist first — but running the per-path apps before the sites
+# means every reload along the way tests a complete config, and a first boot
+# never has a window where go.ziniapps.com/assess-ui/ 404s.
 #
 # Contract (see vm-startup.sh): invoked as `assess-install.sh APP_ENV`.
 # APP_NAME is fixed to "assess-install" here (vm-startup.sh resolves this file by
@@ -26,8 +39,9 @@ set -euo pipefail
 # which is passed through verbatim to every child.
 #
 # Ordering: the backend goes first so its DB/context are in place before the UI
-# and exam apps come up. If any child fails, `set -e` aborts the whole run (a
-# partial deploy is surfaced rather than hidden).
+# and exam apps come up; the two ziniapps sites go last (see above). If any child
+# fails, `set -e` aborts the whole run (a partial deploy is surfaced rather than
+# hidden).
 #
 # Logs — like the child scripts, this only echoes to stdout/stderr. At boot its
 # output (and the children's) is inherited by vm-startup.service:
@@ -40,11 +54,15 @@ set -euo pipefail
 # (the launcher clones to /tmp/deployza/repo and runs us from there).
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# The child deploy scripts, run in this order.
+# The child deploy scripts, run in this order. The first three are per-PATH apps
+# (Tomcat contexts + app.d location blocks); the last two are per-HOST static
+# sites (site.d server blocks). See the header for why the sites come last.
 readonly CHILD_SCRIPTS=(
   "assess-server.sh"
   "assess-ui.sh"
   "assess-exam.sh"
+  "ziniapps-go.sh"
+  "ziniapps-www.sh"
 )
 
 # Per-child log dir (a sibling of the clone under the deploy root:
@@ -108,7 +126,7 @@ main() {
   init_logging          # create ${LOG_DIR}; per-child output is teed in run_child
 
   echo "==============================================================="
-  echo "assess-install orchestrator: deploying all assess apps (${app_env})"
+  echo "assess-install orchestrator: deploying all apps + sites (${app_env})"
   echo "==============================================================="
 
   local child
@@ -132,7 +150,7 @@ main() {
   done
 
   echo
-  echo "All assess apps deployed."
+  echo "All apps and sites deployed."
 }
 
 main "$@"

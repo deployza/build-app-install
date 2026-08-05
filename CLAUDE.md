@@ -42,7 +42,40 @@ provisions the MySQL DB/user, installs the per-webapp Tomcat context
 (`<ctx>.xml` + properties + logback) into `$CATALINA_HOME/conf/Catalina/localhost`,
 and deploys the WAR under the stable name `<ctx>.war` (serving at `/<ctx>`).
 
-Currently one app: **`assess-server`**.
+## Two kinds of app: per-PATH and per-HOST
+
+Not every script follows the shape above. There are two deploy models, and which
+one an app uses determines **which nginx seam it writes into**. Getting this
+wrong is a syntax error at `nginx -t`, not a subtle bug.
+
+| | **per-PATH app** | **per-HOST site** |
+| --- | --- | --- |
+| Serves | `/<ctx>/` on every hostname | `/` on ONE hostname |
+| Examples | `assess-server`, `assess-ui`, `assess-exam` | `ziniapps-go`, `ziniapps-www` |
+| Writes | `/etc/nginx/app.d/<ctx>.conf` | `/etc/nginx/site.d/<site>.conf` |
+| File holds | bare `location` blocks **only** | a complete `server { … }` block |
+| Included from | inside the image's `_` default server | the `http{}` block of `nginx.conf` |
+| Dir created by | the image (`install-nginx.sh`) | the deploy script itself |
+| Extra key | — | `install.server.name` (the hostname) |
+
+**Why two models.** A domain root cannot be a path drop-in: two sites would each
+need `location /` in the one shared server block, which conflicts. Serving a root
+per hostname requires a real `server` block, and a `server` block may only appear
+at the `http{}` level — so the per-HOST scripts create `/etc/nginx/site.d/` and
+add an include for it to `nginx.conf` (idempotently, guarded by a
+`# DEPLOYZA-SITE-D` marker). `conf.d/` is deliberately not reused for this: it is
+the image's namespace.
+
+**Consequence to remember.** Once a hostname has a `server_name` block, it no
+longer falls through to the `_` default server — so the `app.d` per-path apps stop
+resolving on that host unless the block includes them. `ziniapps-go.sh` therefore
+does `include /etc/nginx/app.d/*.conf;` (its landing page links to the product
+with relative URLs); `ziniapps-www.sh` deliberately does **not**, so the product
+keeps exactly one origin.
+
+Apps today: **`assess-server`**, **`assess-ui`**, **`assess-exam`** (per-path),
+**`ziniapps-go`**, **`ziniapps-www`** (per-host), plus the **`assess-install`**
+orchestrator that runs all five.
 
 ## The deploy contract
 
@@ -92,8 +125,10 @@ runtimes differ; do **not** merge them behind a platform flag.
 
 ## When adding a new app
 
-1. Add `vm/<app>.sh` **and** `docker/<app>.sh` (copy `assess-server` as the
-   template; keep the vm/docker differences above).
+1. Add `vm/<app>.sh` **and** `docker/<app>.sh`. Pick the template by model (see
+   "Two kinds of app" above): `assess-server` for a per-PATH app backed by
+   Tomcat, `assess-ui` for a per-PATH static bundle, `ziniapps-www` for a
+   per-HOST static site. Keep the vm/docker differences above.
 2. Fix `APP_NAME` in each to the new name (it is hardcoded — the script *is* that
    app's installer; the launcher resolves it by filename).
 3. Ensure the app's `conf/` (incl. `install.properties`) + WAR are published to
