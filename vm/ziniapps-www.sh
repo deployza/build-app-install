@@ -464,6 +464,14 @@ EOF
 # app a second origin: sessions and cookies set on one host would not be seen on
 # the other, and search engines would index a duplicate. Requests for those paths
 # on this host correctly 404 via the try_files below.
+#
+# Caching: the three no-store-ish headers go on EVERY response from this site so
+# nothing is reused from cache without a revalidation round-trip and a redeploy
+# takes effect immediately. `always` makes them apply to error responses too
+# (add_header otherwise covers only 2xx/3xx). Note that add_header in a nested
+# location REPLACES any inherited set rather than adding to it, so EACH location
+# that can produce a response repeats them — including the internal /404.html
+# block, which is a separate location and would otherwise be cacheable.
 write_nginx_conf() {
   echo "Writing nginx server block ${NGINX_CONF}..."
 
@@ -506,6 +514,13 @@ server {
     error_page 404 /404.html;
     location = /404.html {
         internal;
+
+        # Repeated, not inherited: add_header in a nested location REPLACES the
+        # inherited set rather than adding to it, so without these three the 404
+        # page would be the one response from this site a browser may cache.
+        add_header Cache-Control "no-cache, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires 0 always;
     }
 }
 EOF

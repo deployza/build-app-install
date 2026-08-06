@@ -536,6 +536,14 @@ EOF
 # this host. Longest-prefix matching means those locations win over `location /`
 # below, so the landing page's relative links resolve. See the header for why
 # this line is load-bearing rather than defensive.
+#
+# Caching: the three no-store-ish headers go on EVERY response this block itself
+# serves, so nothing is reused from cache without a revalidation round-trip and a
+# redeploy takes effect immediately. `always` makes them apply to error responses
+# too (add_header otherwise covers only 2xx/3xx). Note that add_header in a nested
+# location REPLACES any inherited set rather than adding to it, so each location
+# repeats them — which is also why the included app.d drop-ins carry their own
+# copies rather than relying on anything set here.
 write_nginx_conf() {
   echo "Writing nginx server block ${NGINX_CONF}..."
 
