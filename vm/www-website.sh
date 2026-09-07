@@ -71,10 +71,10 @@ set -euo pipefail
 #     install.properties             ALL deploy values (see the key list below)
 #   <install.war>                  the versioned WAR
 #
-# DOCS content is a SEPARATE GCS path, always "production" regardless of this
-# VM's own APP_ENV — see DOCS_BUCKET_URI: api-docs publishes exactly one docs
-# site (no per-environment split), so there is nothing for an APP_ENV-scoped
-# path to select between.
+# DOCS content is a SEPARATE GCS path, always "prod" regardless of this VM's
+# own APP_ENV — see DOCS_BUCKET_URI: api-docs publishes exactly one docs site
+# (no per-environment split), so there is nothing for an APP_ENV-scoped path
+# to select between.
 #
 # install.properties is the single source of truth for the deploy; NOTHING is
 # derived by this script. Keys used:
@@ -156,11 +156,13 @@ readonly DEFAULT_WEB_ROOT="/var/www/site"
 # different cadences, and must not share a directory tree.
 readonly DOCS_ROOT="/var/www/api-docs"
 
-# GCS path the docs are pulled FROM. Always "production" — see the header note
-# above on why this does not follow APP_ENV. `-d` (delete) is intentional: a
-# removed/renamed doc page should disappear here too, matching api-docs's own
-# `gsutil rsync -d` on publish (see api-docs/cloudbuild.yaml).
-readonly DOCS_BUCKET_URI="gs://deployza-apps/production/api-docs/site/"
+# GCS path the docs are pulled FROM. Always "prod" — see the header note
+# above on why this does not follow APP_ENV; "prod" (not "production") to
+# match the fleet's one existing convention (products/vms.tf's assess-install
+# VM). `-d` (delete) is intentional: a removed/renamed doc page should
+# disappear here too, matching api-docs's own `gsutil rsync -d` on publish
+# (see api-docs/cloudbuild.yaml).
+readonly DOCS_BUCKET_URI="gs://deployza-apps/prod/api-docs/site/"
 
 # systemd units for the continuous docs puller.
 readonly DOCS_REFRESH_SERVICE="docs-refresh.service"
