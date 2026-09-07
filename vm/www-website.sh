@@ -627,6 +627,15 @@ server {
         add_header Expires 0 always;
     }
 
+    # Bare /docs (no trailing slash) does NOT match \`location /docs/\` below —
+    # nginx prefix-location matching requires the trailing slash to already be
+    # in the request URI, so without this it falls through to \`location /\`
+    # instead (this host's WAR root), where nothing named "docs" exists, and
+    # 404s. Redirect first so both spellings reach the docs site.
+    location = /docs {
+        return 301 /docs/;
+    }
+
     # The MkDocs site (api-docs / www-apidocs), kept in sync by
     # docs-refresh.timer rather than by this deploy — see this script's
     # header. alias, not root: this prefix maps to a directory tree that is
