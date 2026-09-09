@@ -10,8 +10,7 @@ set -euo pipefail
 #
 # A WAR is just a zip, and this one holds nothing but static files, so this
 # script UNZIPS it into an nginx document root and lets nginx serve it
-# directly — exactly the ziniapps-www.sh model. See
-# ../../build-vm-images/docs/website-nginx-plan.md for the cross-repo design.
+# directly — exactly the ziniapps-www.sh model.
 #
 # THIS IS A NEAR-COPY OF ziniapps-www.sh, WITH TWO DELIBERATE ADDITIONS
 #

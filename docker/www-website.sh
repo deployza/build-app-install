@@ -16,9 +16,9 @@ set -euo pipefail
 # docker/<APP_NAME>.sh inside a www-website container image, and no such image
 # exists. If one is ever built, replace this stub with a real deploy script —
 # most likely modeled on hundi-ui.sh/assess-ui.sh's "static WAR, no database"
-# shape, but check build-vm-images/docs/website-nginx-plan.md first for
-# whether the /docs/ MkDocs split (vm/www-website.sh's two additions over the
-# ziniapps-www.sh template) needs a container-side equivalent at all.
+# shape, but check vm/www-website.sh first for whether its two additions over
+# the ziniapps-www.sh template (the /docs/ MkDocs alias block and the
+# docs-refresh puller) need a container-side equivalent at all.
 # -----------------------------------------------------------------------------
 
 echo "ERROR: docker/www-website.sh has no implementation." >&2
