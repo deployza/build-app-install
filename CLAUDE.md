@@ -74,12 +74,15 @@ the image's namespace.
 longer falls through to the `_` default server — so the `app.d` per-path apps stop
 resolving on that host unless the block includes them. `ziniapps-go.sh` therefore
 does `include /etc/nginx/app.d/*.conf;` (its landing page links to the product
-with relative URLs); `ziniapps-www.sh` deliberately does **not**, so the product
-keeps exactly one origin.
+with relative URLs); `www-website.sh` likewise, so that `www-apidocs`' drop-in
+resolves at `www.deployza.com/api-docs/`; `ziniapps-www.sh` deliberately does
+**not**, so that product keeps exactly one origin.
 
-Apps today: **`assess-server`**, **`assess-ui`**, **`assess-exam`** (per-path),
-**`ziniapps-go`**, **`ziniapps-www`** (per-host), plus the **`assess-install`**
-orchestrator that runs all five.
+Apps today: **`assess-server`**, **`assess-ui`**, **`assess-exam`**,
+**`www-apidocs`** (per-path), **`ziniapps-go`**, **`ziniapps-www`**,
+**`www-website`** (per-host), plus two orchestrators — **`assess-install`**
+(the five assess/ziniapps apps) and **`www-install`** (`www-website` +
+`www-apidocs`, the two halves of the www.deployza.com host).
 
 ## The deploy contract
 

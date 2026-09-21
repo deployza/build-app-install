@@ -2,67 +2,63 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# www-website.sh — app deploy script (the <APP_NAME>.sh that vm-startup.sh
-# clones and runs as a child at boot). www-website is the marketing site for
-# www.deployza.com: a STATIC site (no database, no app.properties, no logback,
-# no Tomcat), packaged as a WAR only because that is what its Maven build
-# produces.
+# www-website.sh — app deploy script for the marketing site at
+# www.deployza.com. Run as a child of www-install.sh (the <APP_NAME>.sh that
+# vm-startup.sh clones and runs at boot), and standalone over SSH.
+#
+# www-website is a STATIC site (no database, no app.properties, no logback, no
+# Tomcat), packaged as a WAR only because that is what its Maven build produces.
 #
 # A WAR is just a zip, and this one holds nothing but static files, so this
 # script UNZIPS it into an nginx document root and lets nginx serve it
 # directly — exactly the ziniapps-www.sh model.
 #
-# THIS IS A NEAR-COPY OF ziniapps-www.sh, WITH TWO DELIBERATE ADDITIONS
+# THIS IS A NEAR-COPY OF ziniapps-www.sh, WITH ONE DELIBERATE DIFFERENCE
 #
 # Like ziniapps-www.sh, this is a per-HOST site (see this repo's CLAUDE.md —
 # "Two kinds of app"): it writes a COMPLETE server{} block to
-# /etc/nginx/site.d/, and deliberately does NOT include /etc/nginx/app.d/*.conf
-# — www.deployza.com is the one product on this host, not a landing page
-# linking out to path-prefixed apps, so there is nothing in app.d it needs.
+# /etc/nginx/site.d/. Unlike ziniapps-www.sh it DOES include
+# /etc/nginx/app.d/*.conf, because this host carries a path-prefixed app
+# alongside the marketing site — see below.
 #
-# The two additions, both POLICY THIS SCRIPT OWNS (not baked into the nginx
-# image, consistent with install-nginx-static.sh shipping no app routing):
+# THE API DOCS ARE NOT THIS SCRIPT'S JOB — SEE www-apidocs.sh
 #
-#   1. A second `location /docs/` block in the generated server config,
-#      independent of the WAR unpack — serves the MkDocs site built ON THIS
-#      VM from a `www-apidocs` checkout, at DOCS_ROOT. See write_nginx_conf.
+# This script used to do a second, unrelated job: build and serve the MkDocs API
+# documentation at a path under this same hostname. That is now www-apidocs.sh,
+# a per-PATH app that owns the docs root, the git checkout, the docs-refresh
+# systemd unit and its own location blocks in /etc/nginx/app.d/. The two share
+# nothing but a hostname — different content, different source (a GCS artifact
+# vs. a git checkout built on the VM), different update trigger (a WAR release
+# vs. a docs commit). www-install.sh runs both.
 #
-#   2. An on-demand docs builder — install_docs_refresh_service installs a
-#      oneshot systemd service (docs-refresh.service, NOT a timer — see that
-#      function's header) that clones/pulls github.com/deployza/www-apidocs
-#      and runs `mkdocs build --strict` itself (see
-#      /usr/local/bin/docs-refresh, written by that function), swapping the
-#      result into DOCS_ROOT only on a clean build. It runs once per deploy
-#      of THIS script (refresh_docs_now) — the same boot-time-only, re-run-
-#      to-update model the WAR already follows, just with its own systemd
-#      unit so it can also be re-run on its own (`sudo systemctl start
-#      docs-refresh.service`) without a full redeploy. This REPLACED an
-#      earlier design where Cloud Build ran `mkdocs build` and published
-#      `site/` to GCS for this VM to `gsutil rsync` down — see
-#      build-vm-images/docs/apidocs-vm-build-plan.md for why: it cuts out a
-#      hop, at the cost of this VM needing outbound internet (an egress-only
-#      external IP, build-terraform/website/vms.tf) and read access to a
-#      GitHub PAT (Secret Manager, cross-project grant — see
-#      fetch_github_pat below). www-apidocs' own Cloud Build pipeline is gone
-#      as of this design; nothing publishes to GCS for this path anymore.
+# WHAT THIS SCRIPT STILL OWES THE DOCS is one line in the server block it
+# generates: `include /etc/nginx/app.d/*.conf;` (see write_nginx_conf). Once a
+# hostname has its own server_name block it no longer falls through to the
+# image's `_` default server, so without that include the app.d drop-ins simply
+# do not resolve on www.deployza.com — exactly the consequence CLAUDE.md calls
+# out, and the same reason ziniapps-go.sh carries the line. REMOVING IT SILENTLY
+# 404s /api-docs/ while this script's own `nginx -t` still passes.
 #
-# Whole-site no-cache: EVERY response from this host — the marketing site at
-# / and the docs at /docs/ alike — carries
+# Ordering between the two scripts is NOT load-bearing: nginx resolves that
+# include at reload time, not at write time. www-install.sh runs this one first
+# anyway, so every reload along the way tests a complete config.
+#
+# Whole-site no-cache: EVERY response this block itself serves carries
 #   Cache-Control: no-cache, must-revalidate
 #   Pragma: no-cache
 #   Expires: 0
 # matching ziniapps-www.sh's policy exactly. Each location that can produce a
-# response repeats the three headers rather than inheriting them: add_header
-# in a nested location REPLACES any inherited set rather than adding to it.
+# response repeats the three headers rather than inheriting them: add_header in
+# a nested location REPLACES any inherited set rather than adding to it — which
+# is also why the included app.d drop-ins carry their own copies rather than
+# relying on anything set here.
 #
 # What this script does:
 #   1. downloads the app's install FOLDER and the WAR from GCS
 #   2. unzips the WAR into ${WEB_ROOT}/<site>       (the served document root)
 #   3. ensures http{} includes /etc/nginx/site.d/   (one-time, idempotent)
-#   4. writes /etc/nginx/site.d/<site>.conf         (the per-host server
-#      block, / from the WAR + /docs/ from DOCS_ROOT)
-#   5. installs the on-demand docs-refresh service   (one-time, idempotent)
-#      and builds the docs once, now (refresh_docs_now)
+#   4. ensures /etc/nginx/app.d/ exists             (its server block includes it)
+#   5. writes /etc/nginx/site.d/<site>.conf         (the per-host server block)
 #   6. reloads nginx
 #
 # Contract (see vm-startup.sh): invoked as `<APP_NAME>.sh APP_ENV`.
@@ -79,12 +75,6 @@ set -euo pipefail
 #     install.properties             ALL deploy values (see the key list below)
 #   <install.war>                  the versioned WAR
 #
-# DOCS content has NO GCS path at all — it is built on this VM from a git
-# checkout of www-apidocs' `main` branch (see DOCS_REPO_URL), always that one
-# branch regardless of this VM's own APP_ENV: www-apidocs publishes exactly
-# one docs site (no per-environment split), so there is nothing an
-# APP_ENV-scoped ref would select between.
-#
 # install.properties is the single source of truth for the deploy; NOTHING is
 # derived by this script. Keys used:
 #   install.war                  WAR filename to download and unzip
@@ -98,17 +88,16 @@ set -euo pipefail
 #
 # Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
 # unit. Where its output lands depends on how it is invoked:
-#   * At boot (launched by vm-startup.sh): its output is inherited by the
-#     vm-startup.service unit, so it lands in that journal:
+#   * At boot (via www-install.sh, launched by vm-startup.sh): its output is
+#     inherited by the vm-startup.service unit, so it lands in that journal:
 #       sudo journalctl -u vm-startup.service -b -f
+#     www-install.sh also tees a per-child copy to /tmp/deployza/logs/.
 #   * Run manually over SSH: output goes to your terminal; capture with
 #       sudo bash www-website.sh <APP_ENV> 2>&1 | tee /tmp/www-website.log
 #
 # This script only INSTALLS the files — they are then served by the separate
-# 'nginx' service, and refreshed by the separate 'docs-refresh' timer, whose
-# logs are elsewhere:
+# 'nginx' service, whose logs are elsewhere:
 #   sudo journalctl -u nginx -f
-#   sudo journalctl -u docs-refresh.service
 #   sudo tail -f /var/log/nginx/access.log /var/log/nginx/error.log
 # -----------------------------------------------------------------------------
 
@@ -123,88 +112,29 @@ set -euo pipefail
 # varies (development/production) and is the sole argument.
 readonly APP_NAME="www-website"
 
-# The service that serves the deployed files, and the user it runs its workers
-# as. nginx's master runs as root but its workers drop to this user, so the
-# static files (WAR content and docs alike) must be readable by it.
-readonly NGINX_SERVICE="nginx"
-readonly NGINX_USER="www-data"
-readonly NGINX_GROUP="www-data"
-
-# The per-HOST routing seam. Created by these scripts, not by the image. One file
-# per site: <site>.conf, each holding a complete server{} block, included from
-# the http{} block of nginx.conf.
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, beside
+# this script, so that changing the artifact bucket (or any path the images
+# bake) is one edit for every VM app instead of one per app. docker/ keeps its
+# OWN common.sh — the two platform folders are self-contained, so a bucket
+# change is two edits, one per folder. common.sh documents what belongs there
+# and what deliberately stays here: APP_NAME above and DEFAULT_WEB_ROOT below
+# are this app's own.
 #
-# NOTE there is deliberately no NGINX_APP_D constant here, matching
-# ziniapps-www.sh: this site does not include the per-path apps (there are none
-# on this VM at all — the `nginx` image has no app.d contents baked in either).
-readonly NGINX_SITE_D="/etc/nginx/site.d"
-
-# nginx's main config, where the one-time site.d include is added. An http{}-level
-# include is the only place a server{} block may appear, and the baked config has
-# no such include.
-readonly NGINX_CONF_MAIN="/etc/nginx/nginx.conf"
-
-# Marker comment written next to the generated include line, used to detect an
-# already-patched nginx.conf. Shared BY VALUE with ziniapps-go.sh/ziniapps-www.sh
-# — every per-HOST script uses the same site.d mechanism, so whichever one runs
-# first on a given VM adds the include and any other finds the marker and skips.
-# Irrelevant in practice here (this VM only ever runs www-website), kept for
-# consistency with the other per-HOST scripts rather than invented fresh.
-readonly INCLUDE_MARKER="# DEPLOYZA-SITE-D"
+# NOTE: unlike ziniapps-www.sh, this script DOES use NGINX_APP_D — its server
+# block includes the per-path drop-ins so that www-apidocs.sh's /api-docs/
+# resolves on this hostname (see write_nginx_conf). INCLUDE_MARKER is shared BY
+# VALUE with ziniapps-go.sh/ziniapps-www.sh: whichever per-HOST script runs
+# first on a VM patches nginx.conf and the others find the marker and skip, so
+# the value must stay in sync across them.
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./common.sh
+source "${SCRIPT_DIR}/common.sh"
 
 # Fallback for install.web.root — the parent holding the per-SITE doc roots.
 # Deliberately NOT /var/www/app (the assess-* default): that dir holds per-PATH
 # apps served by the image's `_` block, and the two models should not share a
 # namespace. Not baked by the image, so this script creates it.
 readonly DEFAULT_WEB_ROOT="/var/www/site"
-
-# Where the MkDocs site lives, rebuilt on demand by docs-refresh.service
-# (install_docs_refresh_service, refresh_docs_now). Separate from WEB_ROOT:
-# the WAR's atomic-swap unpack (unpack_war) and the docs' atomic-swap rebuild
-# (via /usr/local/bin/docs-refresh) are two independent update mechanisms —
-# different content, different trigger (a WAR deploy vs. a docs-refresh run)
-# — and must not share a directory tree.
-readonly DOCS_ROOT="/var/www/api-docs"
-
-# Source repo the docs are built FROM. Always `main` — see the header note
-# above on why this does not follow APP_ENV.
-readonly DOCS_REPO_URL="https://github.com/deployza/www-apidocs.git"
-
-# Persistent clone, kept across runs for a fast `git fetch` rather than a
-# full clone every time (see docs-refresh, generated below). Dotfile under
-# WEB_ROOT's parent, same "hidden scratch dir" convention unpack_war uses for
-# its own staging/old dirs — this one just outlives a single run.
-readonly DOCS_SRC_DIR="/var/www/.www-apidocs-src"
-
-# The mkdocs + plugins venv baked by build-vm-images' nginx flavor
-# (install-mkdocs.sh, versions pinned there to match www-apidocs'
-# requirements.txt). NOT installed here: PyPI availability must not be a
-# deploy-time dependency, same reasoning as graphify's baked venv on the mcp
-# image.
-readonly MKDOCS_VENV="/opt/mkdocs/venv"
-
-# Secret Manager id + PROJECT of the read-only GitHub PAT docs-refresh clones
-# with. Shared with the `mcp` flavor's own PAT (build-terraform's
-# builds/secrets.tf, secret id `github-readonly-pat` — renamed from
-# `mcp-github-pat` now that it's not mcp-only) rather than minting a second
-# one — see build-vm-images/docs/apidocs-vm-build-plan.md. It lives in
-# tools-tech-463909, a different project than this VM's own
-# (www-website-460108), so the project must be named explicitly;
-# gcp-secret's metadata-server trick (read the CALLING VM's own project)
-# does not apply to a cross-project secret. Reading it requires the
-# per-secret grant in build-terraform's builds/secrets.tf — without it this
-# fails closed with a 403, not silently.
-readonly GITHUB_PAT_SECRET="github-readonly-pat"
-readonly GITHUB_PAT_PROJECT="tools-tech-463909"
-
-# The on-demand docs builder's systemd unit — no timer (see
-# install_docs_refresh_service's header for why).
-readonly DOCS_REFRESH_SERVICE="docs-refresh.service"
-readonly DOCS_REFRESH_SERVICE_PATH="/etc/systemd/system/${DOCS_REFRESH_SERVICE}"
-readonly DOCS_REFRESH_SCRIPT="/usr/local/bin/docs-refresh"
-
-# Base GCS location that holds per-environment release artifacts.
-readonly GCS_BASE_URL="gs://deployza-apps"
 
 # --- Populated in main() from the APP_ENV argument ----------------------------
 APP_ENV=""              # the single positional argument ("$1"): dev/production
@@ -280,30 +210,21 @@ parse_args() {
 # require_tools: fail early and by name if the host is missing something we need.
 require_tools() {
   local tool missing=()
-  for tool in gsutil unzip nginx git gcloud; do
+  for tool in gsutil unzip nginx; do
     command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
   done
 
   if (( ${#missing[@]} > 0 )); then
     echo "ERROR: required command(s) not found: ${missing[*]}" >&2
-    echo "  This script targets the nginx image (nginx + unzip + git + gcloud" >&2
-    echo "  present)." >&2
+    echo "  This script targets the nginx image (nginx + unzip present)." >&2
     exit 1
   fi
+
+  # No git/gcloud/mkdocs check here any more: those belong to the API docs,
+  # which are a separate app (www-apidocs.sh) with its own require_tools.
 
   if [[ ! -f "$NGINX_CONF_MAIN" ]]; then
     echo "ERROR: ${NGINX_CONF_MAIN} not found — cannot install the site.d include." >&2
-    exit 1
-  fi
-
-  # Fail loudly at deploy time, not 30s later at the first docs-refresh tick:
-  # the mkdocs venv is baked by build-vm-images' nginx flavor
-  # (install-mkdocs.sh), so its absence means this VM booted an image that
-  # predates that installer, or a non-nginx flavor entirely.
-  if [[ ! -x "${MKDOCS_VENV}/bin/mkdocs" ]]; then
-    echo "ERROR: ${MKDOCS_VENV}/bin/mkdocs not found." >&2
-    echo "  This image is missing the baked mkdocs venv (build-vm-images'" >&2
-    echo "  install-mkdocs.sh) — rebuild/redeploy from the nginx image family." >&2
     exit 1
   fi
 }
@@ -523,209 +444,22 @@ EOF
   fi
 }
 
-# prepare_docs_root: create the MkDocs doc root if it does not exist. This
-# script only owns the directory's EXISTENCE, not its contents — those arrive
-# via docs-refresh.service (install_docs_refresh_service / refresh_docs_now).
-# Matches /var/www/app's pattern in install-nginx.sh: baked empty, www-data
-# owned, populated at deploy/refresh time rather than at image-bake time.
-prepare_docs_root() {
-  if [[ ! -d "$DOCS_ROOT" ]]; then
-    echo "Creating docs root ${DOCS_ROOT}..."
-    mkdir -p "$DOCS_ROOT"
-    chown "$NGINX_USER":"$NGINX_GROUP" "$DOCS_ROOT"
-    chmod 755 "$DOCS_ROOT"
-  fi
-}
-
-# install_docs_refresh_service: idempotently install /usr/local/bin/
-# docs-refresh (the actual clone+build+swap logic) plus the oneshot systemd
-# service that runs it.
+# ensure_app_d: create the per-PATH drop-in dir this site's server block
+# includes.
 #
-# NO TIMER — this is deliberately a MANUAL/on-demand process, not a
-# continuous background one: DOCS_ROOT is (re)built exactly once per run of
-# THIS script (refresh_docs_now, called from main() below), same as the WAR
-# itself follows the fleet's "boot-time-only, re-run to update" model
-# (build-design.md §5/§8: push new content, then re-run the startup on the
-# box). Updating the docs later — without a full redeploy — means either
-# `sudo google_metadata_script_runner startup` (re-runs this whole script) or
-# `sudo systemctl start docs-refresh.service` directly, the latter being
-# strictly cheaper since it skips the WAR/nginx-conf steps entirely.
-#
-# WHY A SEPARATE SCRIPT FILE, not an inline ExecStart: the logic (fetch a
-# secret, clone-or-fetch, mkdocs build, atomic swap) is real multi-step
-# shell, and a heredoc'd ExecStart of that size is unreadable and hard to
-# shellcheck. Written to /usr/local/bin rather than baked into the image,
-# matching this repo's own split (build-vm-images bakes the toolchain;
-# deploy scripts own deploy logic) — see
-# build-vm-images/docs/apidocs-vm-build-plan.md.
-#
-# Unlike ensure_site_d_include (which PATCHES an existing file and needs a
-# marker to detect a prior patch), these are WHOLE files this script owns
-# outright — writing the same content again is naturally a no-op, so no
-# marker file is needed; `daemon-reload` is safe to repeat.
-install_docs_refresh_service() {
-  echo "Installing ${DOCS_REFRESH_SCRIPT} and ${DOCS_REFRESH_SERVICE}..."
-
-  cat >"$DOCS_REFRESH_SCRIPT" <<EOF
-#!/bin/bash
-# docs-refresh — build www-apidocs' MkDocs site and swap it into ${DOCS_ROOT}.
-# Installed by build-app-install/vm/${APP_NAME}.sh (install_docs_refresh_service).
-# Do not edit by hand: the next deploy overwrites this file.
-#
-# ExecStart of ${DOCS_REFRESH_SERVICE} — on demand only, no timer: run once
-# per deploy of ${APP_NAME}.sh, or by hand with
-# \`sudo systemctl start ${DOCS_REFRESH_SERVICE}\`. A
-# failed build never touches the live site: DOCS_ROOT is only replaced after
-# \`mkdocs build --strict\` exits 0, so the last good build keeps serving and
-# this run's failure only shows up in the journal
-# (sudo journalctl -u ${DOCS_REFRESH_SERVICE}).
-#
-# NO \`set -x\` — this script's environment briefly holds GITHUB_PAT. See
-# fetch_github_pat.
-set -euo pipefail
-
-DOCS_SRC_DIR="${DOCS_SRC_DIR}"
-DOCS_ROOT="${DOCS_ROOT}"
-DOCS_STAGED="\${DOCS_ROOT}.new"
-DOCS_OLD="\${DOCS_ROOT}.old"
-MKDOCS_VENV="${MKDOCS_VENV}"
-GITHUB_PAT_SECRET="${GITHUB_PAT_SECRET}"
-GITHUB_PAT_PROJECT="${GITHUB_PAT_PROJECT}"
-NGINX_USER="${NGINX_USER}"
-NGINX_GROUP="${NGINX_GROUP}"
-
-log() { echo "[docs-refresh] \$*"; }
-
-ASKPASS_SCRIPT="\$(mktemp)"
-cleanup() {
-  rm -f "\$ASKPASS_SCRIPT"
-  unset GITHUB_PAT
-}
-trap cleanup EXIT
-
-# fetch_github_pat: read the read-only GitHub PAT into process memory only,
-# then point GIT_ASKPASS at a throwaway helper so git never sees the token on
-# argv or writes it into a clone URL / .git/config. Same mechanism as
-# build-vm-images' mcp flavor (gcp-secret + mcp-git-askpass), reimplemented
-# inline here rather than shared with a baked binary: this is the only thing
-# on this VM that ever clones a repo, so there is no second caller to share
-# one with. GITHUB_PAT_PROJECT is passed explicitly (unlike mcp's gcp-secret,
-# which reads the CALLING VM's own project off the metadata server) because
-# this secret lives in a different project than this VM's own — see this
-# script's installer (build-app-install/vm/${APP_NAME}.sh) for the grant this
-# depends on.
-fetch_github_pat() {
-  GITHUB_PAT="\$(gcloud secrets versions access latest \\
-    --secret="\$GITHUB_PAT_SECRET" --project="\$GITHUB_PAT_PROJECT")"
-  export GITHUB_PAT
-
-  cat >"\$ASKPASS_SCRIPT" <<'ASKPASS'
-#!/bin/bash
-case "\$1" in
-    Username*) printf 'x-access-token\\n' ;;
-    *) printf '%s\\n' "\${GITHUB_PAT:?}" ;;
-esac
-ASKPASS
-  chmod 700 "\$ASKPASS_SCRIPT"
-  export GIT_ASKPASS="\$ASKPASS_SCRIPT"
-  export GIT_TERMINAL_PROMPT=0
-}
-
-# sync_repo: shallow-clone on first run, fast-forward to origin/main after.
-# Depth 1 throughout: mkdocs builds the working tree, not the history.
-sync_repo() {
-  if [[ -d "\${DOCS_SRC_DIR}/.git" ]]; then
-    git -C "\$DOCS_SRC_DIR" fetch --depth 1 origin main
-    git -C "\$DOCS_SRC_DIR" reset --hard FETCH_HEAD
-    git -C "\$DOCS_SRC_DIR" clean -fdx
-  else
-    mkdir -p "\$(dirname "\$DOCS_SRC_DIR")"
-    git clone --depth 1 --branch main "${DOCS_REPO_URL}" "\$DOCS_SRC_DIR"
-  fi
-}
-
-# build_site: mkdocs build --strict into a scratch dir NEXT TO the live
-# DOCS_ROOT, mirroring ${APP_NAME}.sh's own unpack_war atomic-swap pattern —
-# a failed or in-progress build must never be visible to nginx.
-build_site() {
-  rm -rf "\${DOCS_STAGED:?}"
-  ( cd "\$DOCS_SRC_DIR" && "\${MKDOCS_VENV}/bin/mkdocs" build --strict --site-dir "\$DOCS_STAGED" )
-  chown -R "\${NGINX_USER}:\${NGINX_GROUP}" "\$DOCS_STAGED"
-}
-
-# swap_in: two-rename swap — rename() cannot replace a non-empty directory,
-# same reason ${APP_NAME}.sh's unpack_war does two renames for the WAR.
-swap_in() {
-  rm -rf "\${DOCS_OLD:?}"
-  if [[ -d "\$DOCS_ROOT" ]]; then
-    mv "\$DOCS_ROOT" "\$DOCS_OLD"
-  fi
-  mv "\$DOCS_STAGED" "\$DOCS_ROOT"
-  rm -rf "\${DOCS_OLD:?}"
-}
-
-main() {
-  fetch_github_pat
-  log "syncing www-apidocs..."
-  sync_repo
-  log "building..."
-  build_site
-  swap_in
-  log "done — \${DOCS_ROOT} updated"
-}
-
-main "\$@"
-EOF
-  chmod 750 "$DOCS_REFRESH_SCRIPT"
-  chown root:root "$DOCS_REFRESH_SCRIPT"
-
-  cat >"$DOCS_REFRESH_SERVICE_PATH" <<EOF
-# Installed by build-app-install/vm/${APP_NAME}.sh. Do not edit by hand: the
-# next deploy overwrites this file.
-#
-# NOT enabled and NO [Install] section — deliberately on-demand only. Run by
-# this script once per deploy (refresh_docs_now, below) and otherwise by hand:
-#   sudo systemctl start ${DOCS_REFRESH_SERVICE}
-[Unit]
-Description=Build the MkDocs site (www-apidocs) into ${DOCS_ROOT}
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Type=oneshot
-# Runs as root (no User=): needs to reach Secret Manager as this VM's own
-# service account, write /usr/local/bin-adjacent scratch files, and chown the
-# result to ${NGINX_USER}. See ${DOCS_REFRESH_SCRIPT} for what actually runs.
-ExecStart=${DOCS_REFRESH_SCRIPT}
-EOF
-  chmod 644 "$DOCS_REFRESH_SERVICE_PATH"
-
-  systemctl daemon-reload
-}
-
-# refresh_docs_now: run one docs build synchronously during THIS deploy —
-# the only time DOCS_ROOT is (re)built automatically; see
-# install_docs_refresh_service's header for the manual/on-demand model.
-#
-# DELIBERATELY NON-FATAL, and called LAST in main() (after write_nginx_conf +
-# reload_nginx) — a docs build failure must never take the marketing site
-# down with it. Under this script's own `set -euo pipefail`, an unguarded
-# `systemctl start --wait` failing here would abort the ENTIRE deploy,
-# including steps that have nothing to do with docs — on a fresh/replaced VM
-# that means no site.d conf gets written at all, so the WAR that already
-# unpacked fine never actually goes live either. That directly breaks this
-# design's own promise (apidocs-vm-build-plan.md) that a broken docs build
-# just means the VM keeps serving the last good one: on a first deploy there
-# IS no last good one for the site.d conf itself. So: log and move on: the
-# systemd unit is already installed, `sudo systemctl start
-# docs-refresh.service` retries it by hand, and the next scheduled deploy
-# tries again automatically.
-refresh_docs_now() {
-  echo "Running an initial docs build..."
-  if ! systemctl start --wait "$DOCS_REFRESH_SERVICE"; then
-    echo "WARNING: initial docs build failed — ${DOCS_ROOT} may be empty or" >&2
-    echo "  stale. Marketing site is unaffected. See:" >&2
-    echo "    sudo journalctl -u ${DOCS_REFRESH_SERVICE}" >&2
+# On the tomcat-nginx-mysql image the dir is baked (install-nginx.sh) and the
+# per-path scripts merely write into it. The Tomcat-free `nginx` flavor this
+# host runs ships NO app routing at all (install-nginx-static.sh), so here it
+# may legitimately not exist — and nginx treats a missing include PATH as a hard
+# config error (the *.conf wildcard may legally match zero files; the directory
+# still has to be there). Creating it is idempotent, and www-apidocs.sh does the
+# same, so whichever of the two runs first wins and the other finds it already
+# present.
+ensure_app_d() {
+  if [[ ! -d "$NGINX_APP_D" ]]; then
+    echo "Creating app drop-in dir ${NGINX_APP_D}..."
+    mkdir -p "$NGINX_APP_D"
+    chmod 755 "$NGINX_APP_D"
   fi
 }
 
@@ -733,27 +467,34 @@ refresh_docs_now() {
 #
 # A COMPLETE server{} block, because it is included at the http{} level (see
 # ensure_site_d_include). GENERATED rather than copied from GCS: its content is
-# fully determined by values we already have (SERVER_NAME, DOC_ROOT, DOCS_ROOT).
+# fully determined by values we already have (SERVER_NAME and DOC_ROOT).
 #
-# `root` for / (the whole host serves from one tree, so the URI appends to the
-# root directly), but `alias` for /docs/: alias is the right tool when a URL
-# PREFIX maps to a differently-named dir (/docs/ -> ${DOCS_ROOT}, which is NOT
-# a subdirectory of DOC_ROOT).
+# `root` rather than `alias`: this block serves the whole host from one tree, so
+# the URI appends to the root directly and `root` states that plainly. (An app.d
+# drop-in mapping a URL prefix to a differently-named dir uses `alias` instead —
+# see www-apidocs.sh.)
 #
 # NO default_server on the listen directive: that is the image's `_` block, and
 # claiming it here would both be a duplicate-default error and hijack every
 # unmatched Host on the VM.
 #
-# NO `include /etc/nginx/app.d/*.conf;` — this is the one product on this host;
-# see this script's header and ziniapps-www.sh's for the same reasoning.
+# include app.d: LOAD-BEARING, not defensive. Once this hostname has its own
+# server_name block it stops falling through to the image's `_` default server,
+# so without this line every app.d drop-in — today, www-apidocs.sh's /api-docs/
+# — 404s on www.deployza.com while `nginx -t` still passes. Longest-prefix
+# matching means those locations win over `location /` below, so the WAR's root
+# handler never sees their requests. Same reasoning as ziniapps-go.sh's copy of
+# the line; ziniapps-www.sh deliberately omits it because that host really does
+# carry exactly one product.
 #
-# Caching: the three no-store-ish headers go on EVERY response from this site —
-# / from the WAR, /docs/ from DOCS_ROOT, and the 404 page alike — so nothing is
-# reused from cache without a revalidation round-trip and a redeploy takes
-# effect immediately. `always` makes them apply to error responses too
-# (add_header otherwise covers only 2xx/3xx). Note that add_header in a nested
-# location REPLACES any inherited set rather than adding to it, so EACH
-# location that can produce a response repeats them.
+# Caching: the three no-store-ish headers go on EVERY response this block itself
+# serves — the WAR's files and the 404 page alike — so nothing is reused from
+# cache without a revalidation round-trip and a redeploy takes effect
+# immediately. `always` makes them apply to error responses too (add_header
+# otherwise covers only 2xx/3xx). Note that add_header in a nested location
+# REPLACES any inherited set rather than adding to it, so EACH location that can
+# produce a response repeats them — which is also why the included app.d
+# drop-ins carry their own copies rather than relying on anything set here.
 write_nginx_conf() {
   echo "Writing nginx server block ${NGINX_CONF}..."
 
@@ -775,7 +516,10 @@ server {
 
     client_max_body_size 0;
 
-    # NOTE: app.d is deliberately NOT included here — see this script's header.
+    # Path-prefixed apps on this host (www-apidocs.sh's /api-docs/ today).
+    # Load-bearing — see this function's header for what silently breaks
+    # without it.
+    include ${NGINX_APP_D}/*.conf;
 
     location / {
         # Plain static serving: no SPA fallback, so an unknown path is a real 404
@@ -784,28 +528,6 @@ server {
 
         # Never reuse a cached response without revalidating — a redeploy is
         # picked up on the next request. Applied to every file by design.
-        add_header Cache-Control "no-cache, must-revalidate" always;
-        add_header Pragma "no-cache" always;
-        add_header Expires 0 always;
-    }
-
-    # Bare /docs (no trailing slash) does NOT match \`location /docs/\` below —
-    # nginx prefix-location matching requires the trailing slash to already be
-    # in the request URI, so without this it falls through to \`location /\`
-    # instead (this host's WAR root), where nothing named "docs" exists, and
-    # 404s. Redirect first so both spellings reach the docs site.
-    location = /docs {
-        return 301 /docs/;
-    }
-
-    # The MkDocs site (www-apidocs), built by docs-refresh.service rather
-    # than by this deploy directly — see this script's header. alias, not
-    # root: this prefix maps to a directory tree that is NOT under
-    # ${DOC_ROOT}.
-    location /docs/ {
-        alias ${DOCS_ROOT}/;
-        try_files \$uri \$uri/ =404;
-
         add_header Cache-Control "no-cache, must-revalidate" always;
         add_header Pragma "no-cache" always;
         add_header Expires 0 always;
@@ -862,7 +584,7 @@ main() {
   # Staging dir is this app's own sibling of the clone under the shared deploy
   # root (see vm-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/
   # <APP_NAME> is ours.
-  STAGE_DIR="/tmp/deployza/${APP_NAME}"
+  STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
   INSTALL_PROPS="${STAGE_DIR}/install.properties"
 
   prepare_staging
@@ -872,19 +594,15 @@ main() {
   download_war
   unpack_war              # unzip + atomic swap into ${WEB_ROOT}/<site>
   ensure_site_d_include   # one-time: create site.d + include it from nginx.conf
-  prepare_docs_root       # create ${DOCS_ROOT} if this is a first deploy
-  install_docs_refresh_service # one-time: install the on-demand docs-build service
+  ensure_app_d            # one-time: create app.d, which the server block includes
   write_nginx_conf        # generate the server block (files first, so the routing
                           # never points at a dir that is not populated yet)
   reload_nginx
-  refresh_docs_now        # build+swap ${DOCS_ROOT} now, this deploy — LAST and
-                          # non-fatal (see its own header): must never block
-                          # the marketing site, which is already fully live
-                          # by this point regardless of how this goes
 
   echo "Deployment complete."
   echo "Site should be available at: http://${SERVER_NAME}/"
-  echo "Docs should be available at: http://${SERVER_NAME}/docs/"
+  echo "Path-prefixed apps on this host (app.d drop-ins, e.g. www-apidocs.sh's"
+  echo "  /api-docs/) are served by this block too — see write_nginx_conf."
 }
 
 main "$@"
