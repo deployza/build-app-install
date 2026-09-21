@@ -73,9 +73,17 @@ if [[ -z "$APP_ENV" ]]; then
   exit 1
 fi
 
-# Base GCS location that holds per-environment release artifacts. The conf/ folder
-# and the WAR for this deploy live under ${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/.
-GCS_BASE_URL="gs://deployza-apps"
+# --- Shared estate constants --------------------------------------------------
+# GCS_BASE_URL and STAGE_ROOT live in docker/common.sh, beside this script, so
+# that changing the artifact bucket is one edit for every containerised app
+# instead of one per app. vm/ keeps its OWN common.sh — the two platform folders
+# are self-contained, so a bucket change is two edits, one per folder. The vm
+# copy additionally carries the NGINX_* seams, which mean nothing here.
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./common.sh
+source "${SCRIPT_DIR}/common.sh"
+
+# This deploy's conf/ folder in that bucket.
 CONF_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/conf"
 
 # Local staging dir for the downloaded conf files and WAR. Cleared first so it
@@ -83,7 +91,7 @@ CONF_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/conf"
 # this one dir — the WAR's filename (install.war) never collides with a conf file.
 # This app's own sibling of the clone under the shared deploy root (see
 # vm-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/<APP_NAME> is ours.
-STAGE_DIR="/tmp/deployza/${APP_NAME}"
+STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
 
 # -----------------------------
 # Clear the previous download from /tmp

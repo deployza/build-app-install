@@ -21,7 +21,7 @@ set -euo pipefail
 #
 # Contract: invoked as `assess-server.sh APP_ENV` (by assess-install.sh).
 # APP_NAME is fixed to "assess-server" here (the backend's GCS artifacts live
-# under gs://deployza-apps/<env>/assess-server/); the single argument is
+# under gs://dz-builds/<env>/assess-server/); the single argument is
 # APP_ENV ("$1").
 #
 # GCS layout (${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/):
@@ -96,7 +96,7 @@ set -euo pipefail
 # --- Fixed identity -----------------------------------------------------------
 # This script IS the assess backend installer. APP_NAME is fixed to
 # "assess-server" because the backend's GCS artifacts (install/ + WAR) still live
-# under gs://deployza-apps/<env>/assess-server/. Only APP_ENV varies
+# under gs://dz-builds/<env>/assess-server/. Only APP_ENV varies
 # (development/production) and is the sole argument.
 readonly APP_NAME="assess-server"
 
@@ -105,17 +105,16 @@ readonly TOMCAT_SERVICE="tomcat"
 readonly TOMCAT_USER="tomcat"
 readonly TOMCAT_GROUP="tomcat"
 
-# The nginx service fronting Tomcat on :80, and the routing seam the
-# tomcat-nginx-mysql image bakes EMPTY: its :80 server block does
-# `include /etc/nginx/app.d/*.conf;`, so a file dropped here adds this app's
-# routing without touching the baked config.
-readonly NGINX_SERVICE="nginx"
-readonly NGINX_APP_D="/etc/nginx/app.d"
-
-# Base GCS location that holds per-environment release artifacts. The install/
-# folder and the WAR for this deploy live under
-# ${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/.
-readonly GCS_BASE_URL="gs://deployza-apps"
+# --- Shared estate constants --------------------------------------------------
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, beside
+# this script, so that changing the artifact bucket (or any path the images
+# bake) is one edit for every VM app instead of one per app. docker/ keeps its
+# OWN common.sh — the two platform folders are self-contained, so a bucket
+# change is two edits, one per folder. common.sh documents what belongs there
+# and what deliberately stays here (anything per-app).
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./common.sh
+source "${SCRIPT_DIR}/common.sh"
 
 # --- Populated in main() from the APP_ENV argument ----------------------------
 APP_ENV=""              # the single positional argument ("$1"): dev/production
@@ -481,7 +480,7 @@ main() {
   # root (see vm-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/
   # <APP_NAME> is ours. Same path whether launched by vm-startup.sh at boot or
   # run standalone over SSH.
-  STAGE_DIR="/tmp/deployza/${APP_NAME}"
+  STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
   INSTALL_PROPS="${STAGE_DIR}/install.properties"
 
   prepare_staging

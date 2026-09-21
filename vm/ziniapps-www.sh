@@ -96,40 +96,33 @@ set -euo pipefail
 # varies (development/production) and is the sole argument.
 readonly APP_NAME="ziniapps-www"
 
-# The service that serves the deployed files, and the user it runs its workers
-# as. nginx's master runs as root but its workers drop to this user, so the
-# static files must be readable by it.
-readonly NGINX_SERVICE="nginx"
-readonly NGINX_USER="www-data"
-readonly NGINX_GROUP="www-data"
+# --- Shared estate constants --------------------------------------------------
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, beside
+# this script, so that changing the artifact bucket (or any path the images
+# bake) is one edit for every VM app instead of one per app. docker/ keeps its
+# OWN common.sh — the two platform folders are self-contained, so a bucket
+# change is two edits, one per folder. common.sh documents what belongs there
+# and what deliberately stays here (anything per-app).
+#
+# NOTE: this script deliberately does NOT use NGINX_APP_D, unlike
+# ziniapps-go.sh — this site does not include the per-path apps (see the
+# header), so the product keeps exactly one origin. INCLUDE_MARKER is shared
+# BY VALUE with ziniapps-go.sh: whichever runs first patches nginx.conf and the
+# other finds the marker and skips, so the two must stay in sync.
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./common.sh
+source "${SCRIPT_DIR}/common.sh"
 
 # The per-HOST routing seam. Created by these scripts, not by the image. One file
 # per site: <site>.conf, each holding a complete server{} block, included from
 # the http{} block of nginx.conf.
 #
-# NOTE there is deliberately no NGINX_APP_D constant here, unlike ziniapps-go.sh:
-# this site does not include the per-path apps (see the header).
-readonly NGINX_SITE_D="/etc/nginx/site.d"
-
-# nginx's main config, where the one-time site.d include is added. An http{}-level
-# include is the only place a server{} block may appear, and the baked config has
-# no such include.
-readonly NGINX_CONF_MAIN="/etc/nginx/nginx.conf"
-
-# Marker comment written next to the generated include line, used to detect an
-# already-patched nginx.conf. Shared with ziniapps-go.sh by value: whichever
-# script runs first adds the include, and the other then finds the marker and
-# skips. The two must stay in sync — a mismatch would add the include twice.
-readonly INCLUDE_MARKER="# DEPLOYZA-SITE-D"
 
 # Fallback for install.web.root — the parent holding the per-SITE doc roots.
 # Deliberately NOT /var/www/app (the assess-* default): that dir holds per-PATH
 # apps served by the image's `_` block, and the two models should not share a
 # namespace. Not baked by the image, so this script creates it.
 readonly DEFAULT_WEB_ROOT="/var/www/site"
-
-# Base GCS location that holds per-environment release artifacts.
-readonly GCS_BASE_URL="gs://deployza-apps"
 
 # --- Populated in main() from the APP_ENV argument ----------------------------
 APP_ENV=""              # the single positional argument ("$1"): dev/production
@@ -560,7 +553,7 @@ main() {
   # Staging dir is this app's own sibling of the clone under the shared deploy
   # root (see vm-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/
   # <APP_NAME> is ours.
-  STAGE_DIR="/tmp/deployza/${APP_NAME}"
+  STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
   INSTALL_PROPS="${STAGE_DIR}/install.properties"
 
   prepare_staging

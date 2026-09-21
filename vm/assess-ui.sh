@@ -89,19 +89,16 @@ set -euo pipefail
 # (development/production) and is the sole argument.
 readonly APP_NAME="assess-ui"
 
-# The service that serves the deployed files, and the user it runs its workers
-# as. nginx's master runs as root but its workers drop to this user, so the
-# static files must be readable by it. (The baked image creates /var/www/app
-# owned by www-data; we match that ownership.)
-readonly NGINX_SERVICE="nginx"
-readonly NGINX_USER="www-data"
-readonly NGINX_GROUP="www-data"
-
-# The routing seam baked EMPTY into the tomcat-nginx-mysql image: the :80 server
-# block does `include /etc/nginx/app.d/*.conf;`, so a file dropped here adds
-# location blocks to it. This script owns exactly one file in that dir —
-# <ctx>.conf — and never touches the server block itself.
-readonly NGINX_APP_D="/etc/nginx/app.d"
+# --- Shared estate constants --------------------------------------------------
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, beside
+# this script, so that changing the artifact bucket (or any path the images
+# bake) is one edit for every VM app instead of one per app. docker/ keeps its
+# OWN common.sh — the two platform folders are self-contained, so a bucket
+# change is two edits, one per folder. common.sh documents what belongs there
+# and what deliberately stays here (anything per-app).
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./common.sh
+source "${SCRIPT_DIR}/common.sh"
 
 # Fallback for install.web.root — the static root the tomcat-nginx-mysql image
 # bakes (empty, www-data-owned) for exactly this purpose. It is the PARENT that
@@ -114,11 +111,6 @@ readonly NGINX_APP_D="/etc/nginx/app.d"
 # pre-creating that dir on the VM with www-data able to traverse it — nothing
 # outside this path is created or chowned by the image.
 readonly DEFAULT_WEB_ROOT="/var/www/app"
-
-# Base GCS location that holds per-environment release artifacts. The install/
-# folder and the WAR for this deploy live under
-# ${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/.
-readonly GCS_BASE_URL="gs://deployza-apps"
 
 # --- Populated in main() from the APP_ENV argument ----------------------------
 APP_ENV=""              # the single positional argument ("$1"): dev/production
@@ -453,7 +445,7 @@ main() {
   # root (see vm-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/
   # <APP_NAME> is ours. Same path whether launched by vm-startup.sh at boot or
   # run standalone over SSH.
-  STAGE_DIR="/tmp/deployza/${APP_NAME}"
+  STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
   INSTALL_PROPS="${STAGE_DIR}/install.properties"
 
   prepare_staging

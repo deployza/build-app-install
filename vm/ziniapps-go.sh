@@ -115,37 +115,21 @@ set -euo pipefail
 # varies (development/production) and is the sole argument.
 readonly APP_NAME="ziniapps-go"
 
-# The service that serves the deployed files, and the user it runs its workers
-# as. nginx's master runs as root but its workers drop to this user, so the
-# static files must be readable by it.
-readonly NGINX_SERVICE="nginx"
-readonly NGINX_USER="www-data"
-readonly NGINX_GROUP="www-data"
-
-# The per-PATH routing seam baked EMPTY into the tomcat-nginx-mysql image. This
-# script writes NOTHING here — it is referenced only so the server block this
-# script generates can include it, keeping the assess-* apps reachable on this
-# host (see the header). Its existence is the image check in require_tools.
-readonly NGINX_APP_D="/etc/nginx/app.d"
-
-# The per-HOST routing seam, created by this script (the image does not bake it —
-# it predates any host-based app). One file per site: <site>.conf, each holding a
-# complete server{} block. Distinct from app.d both in content (server blocks vs.
-# bare location blocks) and in where it is included from (http{} level, not
-# inside a server block) — mixing the two would be a syntax error either way.
-readonly NGINX_SITE_D="/etc/nginx/site.d"
-
-# nginx's main config, where the one-time site.d include is added. Editing this
-# file is what makes a per-host block possible at all: an http{}-level include is
-# the only place a server{} block may appear, and the baked config has no such
-# include.
-readonly NGINX_CONF_MAIN="/etc/nginx/nginx.conf"
-
-# Marker comment written next to the generated include line, used to detect an
-# already-patched nginx.conf. Grepping for the marker rather than for the include
-# path means a hand-written include with different spacing is not mistaken for
-# ours (and ours is not duplicated).
-readonly INCLUDE_MARKER="# DEPLOYZA-SITE-D"
+# --- Shared estate constants --------------------------------------------------
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, beside
+# this script, so that changing the artifact bucket (or any path the images
+# bake) is one edit for every VM app instead of one per app. docker/ keeps its
+# OWN common.sh — the two platform folders are self-contained, so a bucket
+# change is two edits, one per folder. common.sh documents what belongs there
+# and what deliberately stays here (anything per-app).
+#
+# NOTE on NGINX_APP_D: this script WRITES NOTHING there. It reads the constant
+# only so the server block it generates can `include` that dir, keeping the
+# assess-* per-path apps reachable on this host (see the header). Its existence
+# is the image check in require_tools.
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./common.sh
+source "${SCRIPT_DIR}/common.sh"
 
 # Fallback for install.web.root — the parent holding the per-SITE doc roots.
 #
@@ -155,11 +139,6 @@ readonly INCLUDE_MARKER="# DEPLOYZA-SITE-D"
 # Unlike /var/www/app this dir is not baked by the image, so this script creates
 # it (see prepare_web_root).
 readonly DEFAULT_WEB_ROOT="/var/www/site"
-
-# Base GCS location that holds per-environment release artifacts. The install/
-# folder and the WAR for this deploy live under
-# ${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/.
-readonly GCS_BASE_URL="gs://deployza-apps"
 
 # --- Populated in main() from the APP_ENV argument ----------------------------
 APP_ENV=""              # the single positional argument ("$1"): dev/production
@@ -627,7 +606,7 @@ main() {
   # root (see vm-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/
   # <APP_NAME> is ours. Same path whether launched by vm-startup.sh at boot or
   # run standalone over SSH.
-  STAGE_DIR="/tmp/deployza/${APP_NAME}"
+  STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
   INSTALL_PROPS="${STAGE_DIR}/install.properties"
 
   prepare_staging

@@ -28,8 +28,12 @@ One script per app **per platform**:
 
 ```
 build-app-install/
-├── vm/<APP_NAME>.sh       # deploy into a native systemd Tomcat on a VM
-└── docker/<APP_NAME>.sh   # deploy into the PID-1 Tomcat of a container
+├── vm/
+│   ├── common.sh          # constants SOURCED by every vm/ script
+│   └── <APP_NAME>.sh      # deploy into a native systemd Tomcat on a VM
+└── docker/
+    ├── common.sh          # constants SOURCED by every docker/ script
+    └── <APP_NAME>.sh      # deploy into the PID-1 Tomcat of a container
 ```
 
 The launcher clones this repo to `/tmp/deployza/repo`, then runs
@@ -37,7 +41,7 @@ The launcher clones this repo to `/tmp/deployza/repo`, then runs
 basename); `APP_ENV` (`development` / `production`) is the sole argument.
 
 Each script: downloads the app's `conf/` folder + WAR from **GCS**
-(`gs://deployza-apps/<APP_ENV>/<APP_NAME>/`), reads `install.properties`,
+(`gs://dz-builds/<APP_ENV>/<APP_NAME>/`), reads `install.properties`,
 provisions the MySQL DB/user, installs the per-webapp Tomcat context
 (`<ctx>.xml` + properties + logback) into `$CATALINA_HOME/conf/Catalina/localhost`,
 and deploys the WAR under the stable name `<ctx>.war` (serving at `/<ctx>`).
@@ -104,6 +108,49 @@ runtimes differ; do **not** merge them behind a platform flag.
 | Deploy style | **hot-deploy** into a live Tomcat: undeploy old context, wait for the exploded dir to vanish, drop new WAR under a temp name then `mv` (watcher never sees a partial WAR) | **plain drop**: Tomcat isn't running yet — remove old, copy new, return; the entrypoint then `exec`s `catalina.sh run` |
 | Log target | app logs to files under `/home/tomcat/instance/logs/<app>/` (per its logback) | app logs to **stdout** — `<ctx>.xml` must not point logback at a file dir |
 
+## `common.sh` — one per platform folder
+
+Each of `vm/` and `docker/` has **its own** `common.sh`, sourced by every deploy
+script in that folder from its own directory:
+
+```bash
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/common.sh"
+```
+
+It holds the values identical for **every app on that platform** and owned by
+the infrastructure, so changing one is a single edit per folder rather than one
+per app:
+
+| | `vm/common.sh` | `docker/common.sh` |
+| --- | --- | --- |
+| Artifact bucket | `GCS_BASE_URL` | `GCS_BASE_URL` |
+| Staging parent | `STAGE_ROOT` | `STAGE_ROOT` |
+| nginx seams | `NGINX_APP_D`, `NGINX_SITE_D`, `NGINX_CONF_MAIN`, `INCLUDE_MARKER`, `NGINX_SERVICE`, `NGINX_USER`, `NGINX_GROUP` | **none** — Tomcat is PID 1 and serves directly; there is no nginx in an app container |
+
+**Two copies is the deliberate choice**, keeping each platform folder
+self-contained for the same reason `vm/<app>.sh` and `docker/<app>.sh` are
+separate copies (next section). **The price: `GCS_BASE_URL` and `STAGE_ROOT`
+appear in both files — change the bucket in BOTH, or the two platforms pull
+from different places.** Do not "fix" this by having one folder source the
+other's copy.
+
+**What must NOT move into either file:** anything per-app — `APP_NAME`, the
+context path, `DEFAULT_WEB_ROOT` (`/var/www/app` for per-PATH apps,
+`/var/www/site` for per-HOST sites). Nor may `docker/common.sh` ever name the
+`tomcat` user or group: it does not exist in those images.
+
+Both files are sourced, never executed — no shebang, no `set -e`, not in
+`CHILD_SCRIPTS`. Their values are `readonly`, which is safe because each deploy
+script is its own `bash` process (the orchestrator runs children via
+`bash <child>`), so each is sourced exactly once per process.
+`assess-install.sh` sources neither — it deploys nothing, it only invokes the
+children.
+
+**This depends on the launcher cloning the whole repo** (it does — to
+`/tmp/deployza/repo`). A launcher that copied a single script to a host would
+break at the `source` line.
+
 ## Conventions
 
 - `#!/bin/bash` + `set -euo pipefail` at the top of every script.
@@ -114,7 +161,7 @@ runtimes differ; do **not** merge them behind a platform flag.
 - **Idempotent**: clear the staging dir, re-download, undeploy the old context,
   deploy the new one — safe to re-run (a redeploy is "push to GCS, re-run
   startup"). Never append/duplicate.
-- **Staging dir** is `/tmp/deployza/<APP_NAME>/` — this app's sibling of the
+- **Staging dir** is `${STAGE_ROOT}/<APP_NAME>/` (`/tmp/deployza/<APP_NAME>/`) — this app's sibling of the
   clone (`/tmp/deployza/repo`), owned by this script. Same path whether launched
   at boot or run standalone over SSH.
 - Read `install.properties` via the `read_prop` / `require_prop` helpers (last
@@ -130,9 +177,11 @@ runtimes differ; do **not** merge them behind a platform flag.
    Tomcat, `assess-ui` for a per-PATH static bundle, `ziniapps-www` for a
    per-HOST static site. Keep the vm/docker differences above.
 2. Fix `APP_NAME` in each to the new name (it is hardcoded — the script *is* that
-   app's installer; the launcher resolves it by filename).
+   app's installer; the launcher resolves it by filename). Keep the
+   `source "${SCRIPT_DIR}/common.sh"` line — do not re-declare `GCS_BASE_URL`,
+   `STAGE_ROOT` or the `NGINX_*` constants locally.
 3. Ensure the app's `conf/` (incl. `install.properties`) + WAR are published to
-   `gs://deployza-apps/<env>/<app>/`.
+   `gs://dz-builds/<env>/<app>/`.
 4. Launch a host with metadata/env `APP_NAME=<app>` `APP_ENV=<env>`.
 
 ## Gotchas
