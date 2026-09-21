@@ -35,10 +35,9 @@
 # Base GCS location holding per-environment release artifacts. Each app's conf/
 # folder and WAR live under ${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/.
 #
-# This replaced gs://deployza-apps; the layout inside is unchanged. The bucket is
-# read by the service account the container runs as — a new bucket needs an IAM
-# grant in build-terraform before a host can pull from it. KEEP IN SYNC WITH
-# vm/common.sh.
+# The bucket is read by the service account the container runs as — a new
+# bucket needs an IAM grant in build-terraform before a host can pull from it.
+# KEEP IN SYNC WITH vm/common.sh.
 readonly GCS_BASE_URL="gs://dz-builds"
 
 # --- Local staging ------------------------------------------------------------

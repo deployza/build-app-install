@@ -39,10 +39,9 @@
 # install/ (or conf/) folder and WAR live under
 # ${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/.
 #
-# This replaced gs://deployza-apps; the layout inside is unchanged. The bucket
-# is read by the VM's compute service account — a new bucket needs an IAM grant
-# in build-terraform before a host can pull from it. KEEP IN SYNC WITH
-# docker/common.sh.
+# The bucket is read by the VM's compute service account — a new bucket needs
+# an IAM grant in build-terraform before a host can pull from it. KEEP IN SYNC
+# WITH docker/common.sh.
 readonly GCS_BASE_URL="gs://dz-builds"
 
 # --- Local staging ------------------------------------------------------------
