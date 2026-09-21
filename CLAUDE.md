@@ -31,6 +31,7 @@ build-app-install/
 ├── vm/
 │   ├── common.sh          # constants SOURCED by every vm/ script
 │   └── <APP_NAME>.sh      # deploy into a native systemd Tomcat on a VM
+├── otel/                  # NOT an app — operational config, PUSHED on demand
 └── docker/
     ├── common.sh          # constants SOURCED by every docker/ script
     └── <APP_NAME>.sh      # deploy into the PID-1 Tomcat of a container
@@ -45,6 +46,33 @@ Each script: downloads the app's `conf/` folder + WAR from **GCS**
 provisions the MySQL DB/user, installs the per-webapp Tomcat context
 (`<ctx>.xml` + properties + logback) into `$CATALINA_HOME/conf/Catalina/localhost`,
 and deploys the WAR under the stable name `<ctx>.war` (serving at `/<ctx>`).
+
+## `otel/` is not an app — read this before treating it like one
+
+[`otel/`](otel/) breaks the "one script per app per platform" shape above, on
+purpose. It holds OpenTelemetry Collector configuration, and it differs from
+`vm/` and `docker/` in three ways that matter:
+
+- **It is pushed, not pulled.** No launcher runs it. `otel/push.sh` runs on your
+  laptop, renders a config for the target's image flavor, ships it over the IAP
+  tunnel and runs `otel/apply.sh` there. Nothing at boot touches it.
+- **It is not selected by `APP_NAME`.** The pusher names the target instance
+  directly; the flavor comes from the VM's own `/etc/image-manifest.txt`.
+- **There is no `docker/` counterpart, deliberately.** Containers log to stdout
+  and the runtime collects it. Do not add one for symmetry.
+
+The image bakes only the collector binary, its unit and an inert `nop` config,
+so a VM with nothing pushed to it collects nothing and sends nowhere. See
+[`otel/README.md`](otel/README.md) and
+[`../build-docs/ops-execution.md`](../build-docs/ops-execution.md).
+
+> **Heads-up on direction.** `otel/` is the first piece of a wider move to
+> push-only: `vm-startup.sh`, the boot-time launcher that clones this repo and
+> runs `vm/<APP_NAME>.sh`, is slated for retirement in favour of pushing app
+> deploys the same way (ops-execution.md Part C). It has **not** happened yet —
+> the boot flow described below is still live and still correct. When it does,
+> `docker-startup.sh` stays, so the `vm/` ↔ `docker/` symmetry below breaks
+> permanently.
 
 ## Two kinds of app: per-PATH and per-HOST
 

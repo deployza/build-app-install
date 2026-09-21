@@ -1,0 +1,38 @@
+# name: clickhouse
+#
+# The first line above is LOAD-BEARING: push.sh reads the pipeline key from it.
+# THIS HEADER IS STRIPPED at render time: splicing starts at the first
+# non-comment line below and lands at the exporter placeholder in
+# configs/<flavor>.yaml, already indented to sit under `exporters:`. Comments
+# INSIDE the block are kept.
+#
+# Credentials come from /etc/otelcol/env (640 root:otelcol). Not in this file,
+# which is in git.
+  clickhouse:
+    endpoint: ${env:OTEL_CH_ENDPOINT}
+    username: ${env:OTEL_CH_USERNAME}
+    password: ${env:OTEL_CH_PASSWORD}
+    database: otel
+    logs_table_name: otel_logs
+
+    # CREATE THE SCHEMA ON FIRST CONNECT. Convenient while this is being stood
+    # up, and worth turning OFF once the table is real and managed elsewhere:
+    # every VM's collector asserting DDL against a shared table is not a
+    # property you want in steady state.
+    create_schema: true
+
+    # 30 days. ClickHouse enforces this itself via the table TTL, so retention
+    # is not something the edge has to think about.
+    ttl: 720h
+
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 60s
+      max_elapsed_time: 300s
+
+    sending_queue:
+      enabled: true
+      # In memory - same reasoning and same trade-off as the elasticsearch
+      # exporter; see that file.
+      queue_size: 1000
