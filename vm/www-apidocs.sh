@@ -247,7 +247,7 @@ prepare_docs_root() {
 # NO TIMER — this is deliberately a MANUAL/on-demand process, not a continuous
 # background one: DOCS_ROOT is (re)built exactly once per run of THIS script
 # (refresh_docs_now, called from main() below), the same "boot-time-only, re-run
-# to update" model every app here follows (build-design.md §5/§8: push new
+# to update" model every app here follows (ops-deployment.md §2/§5: push new
 # content, then re-run the startup on the box). Updating the docs later —
 # without a full redeploy — means either `sudo google_metadata_script_runner
 # startup` (re-runs the whole orchestrator) or `sudo systemctl start

@@ -6,7 +6,7 @@ Guidance for Claude Code when working in this repository.
 > The overall Cloud Build / deploy / Terraform architecture lives in the
 > **`build-docs`** repo, cloned as a sibling of this one:
 > [`../build-docs/README.md`](../build-docs/README.md) — see especially
-> [`../build-docs/build-design.md`](../build-docs/build-design.md) §5–§7 (the
+> [`../build-docs/ops-deployment.md`](../build-docs/ops-deployment.md) §2–§4 (the
 > boot-time app-install flow).
 >
 > **If that path does not exist, you have not cloned `build-docs` yet — stop and
@@ -118,7 +118,7 @@ Apps today: **`assess-server`**, **`assess-ui`**, **`assess-exam`**,
   truth.** The script derives **nothing** on its own — every value (WAR filename,
   `CATALINA_HOME`, context path, app-properties/logback filenames, DB
   name/user/password, MySQL root creds) is read from it. Key list is documented in
-  the header comment of each script and in `build-docs/build-design.md` §2.
+  the header comment of each script and in `build-docs/ops-deployment.md` §1.
 - Conf files are installed **verbatim** — absolute paths inside `<ctx>.xml` must
   already match `install.catalina.home`.
 - The WAR is staged under its real versioned filename but **deployed as
