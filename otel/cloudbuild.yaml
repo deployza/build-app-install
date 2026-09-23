@@ -22,7 +22,7 @@ steps:
       # reports green on a config the VMs will reject. There is no way to
       # reference that file from here (different repo), so this is a manual
       # pairing - bump both together.
-      - 'OTELCOL_VERSION=0.130.0'
+      - 'OTELCOL_VERSION=0.161.0'
     args:
       - -c
       - |
