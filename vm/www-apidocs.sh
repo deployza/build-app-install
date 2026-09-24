@@ -59,7 +59,7 @@ set -euo pipefail
 # location REPLACES any inherited set rather than adding to it, and an app.d
 # drop-in is nested inside someone else's server block by definition.
 #
-# Contract (see vm-startup.sh): invoked as `<APP_NAME>.sh APP_ENV`.
+# Contract: invoked as `<APP_NAME>.sh APP_ENV`.
 # APP_NAME is fixed to "www-apidocs" here (this IS that script); the single
 # argument is APP_ENV ("$1").
 #
@@ -69,9 +69,8 @@ set -euo pipefail
 #
 # Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
 # unit. Where its output lands depends on how it is invoked:
-#   * At boot (via www-install.sh, launched by vm-startup.sh): its output is
-#     inherited by the vm-startup.service unit, so it lands in that journal:
-#       sudo journalctl -u vm-startup.service -b -f
+#   * Pushed (the normal path, via www-install.sh): its output goes to wherever
+#     the pusher ran it — no systemd unit, no journal of its own.
 #     www-install.sh also tees a per-child copy to /tmp/deployza/logs/.
 #   * Run manually over SSH: output goes to your terminal; capture with
 #       sudo bash www-apidocs.sh <APP_ENV> 2>&1 | tee /tmp/www-apidocs.log
@@ -90,7 +89,7 @@ set -euo pipefail
 
 # --- Fixed identity -----------------------------------------------------------
 # This script IS the www-apidocs installer, so APP_NAME is fixed rather than
-# taken from the launcher, exactly like its siblings. Only APP_ENV varies and is
+# taken from the caller, exactly like its siblings. Only APP_ENV varies and is
 # the sole argument.
 readonly APP_NAME="www-apidocs"
 
@@ -162,12 +161,12 @@ APP_ENV=""              # the single positional argument ("$1"): dev/production
 # Functions
 # =============================================================================
 
-# parse_args: validate the launcher contract and set APP_ENV.
+# parse_args: validate the caller's contract and set APP_ENV.
 #
 # APP_ENV is required but, uniquely in this folder, selects NOTHING: there are
 # no per-environment artifacts for this app (no GCS folder at all) and the docs
 # always come from `main`. It stays mandatory rather than optional so this
-# script obeys the same launcher contract as every sibling and can sit in any
+# script obeys the same contract as every sibling and can sit in any
 # orchestrator's CHILD_SCRIPTS without a special case.
 parse_args() {
   APP_ENV="${1:-}"
@@ -176,7 +175,7 @@ parse_args() {
     echo "Usage: $0 APP_ENV" >&2
     exit 1
   fi
-  echo "APP_ENV=${APP_ENV} accepted for the launcher contract; this app has no"
+  echo "APP_ENV=${APP_ENV} accepted for the standard contract; this app has no"
   echo "  per-environment artifacts — the docs always build from ${DOCS_REPO_URL} (main)."
 }
 
@@ -246,11 +245,11 @@ prepare_docs_root() {
 #
 # NO TIMER — this is deliberately a MANUAL/on-demand process, not a continuous
 # background one: DOCS_ROOT is (re)built exactly once per run of THIS script
-# (refresh_docs_now, called from main() below), the same "boot-time-only, re-run
-# to update" model every app here follows (ops-deployment.md §2/§5: push new
-# content, then re-run the startup on the box). Updating the docs later —
-# without a full redeploy — means either `sudo google_metadata_script_runner
-# startup` (re-runs the whole orchestrator) or `sudo systemctl start
+# (refresh_docs_now, called from main() below), the same "deploy-time-only,
+# re-run to update" model every app here follows (ops-deployment.md §2/§5: push
+# new content, then re-run the deploy on the box). Updating the docs later —
+# without a full redeploy — means either re-running the orchestrator
+# (`sudo bash www-install.sh <APP_ENV>`) or `sudo systemctl start
 # docs-refresh.service` directly, the latter being strictly cheaper since it
 # skips the nginx steps entirely.
 #

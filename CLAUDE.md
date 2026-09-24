@@ -6,8 +6,10 @@ Guidance for Claude Code when working in this repository.
 > The overall Cloud Build / deploy / Terraform architecture lives in the
 > **`build-docs`** repo, cloned as a sibling of this one:
 > [`../build-docs/README.md`](../build-docs/README.md) — see especially
-> [`../build-docs/ops-deployment.md`](../build-docs/ops-deployment.md) §2–§4 (the
-> boot-time app-install flow).
+> [`../build-docs/ops-deployment.md`](../build-docs/ops-deployment.md) §2–§4 (how
+> an app reaches a host) and
+> [`../build-docs/ops-execution.md`](../build-docs/ops-execution.md) Part C (why
+> VMs are push-only).
 >
 > **If that path does not exist, you have not cloned `build-docs` yet — stop and
 > clone it first** (it sits next to this repo under `Build/`):
@@ -15,14 +17,19 @@ Guidance for Claude Code when working in this repository.
 > git clone https://github.com/deployza/build-app-install.git
 > ```
 > Without it you are missing the cross-repo context (how this repo fits the
-> image / GCS-artifact / boot-launcher flow).
+> image / GCS-artifact / push flow).
 
 ## What this repo is
 
-**Per-app boot-time deploy scripts.** These are the scripts a host runs to
-install a Deployza application onto itself — cloned at boot/start by the launcher
-**baked into the images** (`vm-startup.sh` on a VM, `docker-startup.sh` in a
-container; both live in the image repos, not here).
+**Per-app deploy scripts.** These are the scripts a host runs to install a
+Deployza application onto itself. **How they arrive differs by platform, and
+that asymmetry is permanent** (see the `vm/` vs `docker/` box below):
+
+- **VM** — the `vm/` folder is **PUSHED** to a running instance over SSH through
+  the IAP tunnel, then run there. There is no launcher on a VM: `vm-startup.sh`
+  was deleted on 2026-09-24.
+- **Container** — `docker-startup.sh`, baked into the image, clones this repo at
+  start and runs `docker/<APP_NAME>.sh`. It stays.
 
 One script per app **per platform**:
 
@@ -37,8 +44,8 @@ build-app-install/
     └── <APP_NAME>.sh      # deploy into the PID-1 Tomcat of a container
 ```
 
-The launcher clones this repo to `/tmp/deployza/repo`, then runs
-`<clone>/<platform>/<APP_NAME>.sh <APP_ENV>`. `APP_NAME` selects the script (its
+Either way the scripts land at `/tmp/deployza/repo` and are invoked as
+`<platform>/<APP_NAME>.sh <APP_ENV>`. `APP_NAME` selects the script (its
 basename); `APP_ENV` (`development` / `production`) is the sole argument.
 
 Each script: downloads the app's `conf/` folder + WAR from **GCS**
@@ -53,9 +60,10 @@ and deploys the WAR under the stable name `<ctx>.war` (serving at `/<ctx>`).
 purpose. It holds OpenTelemetry Collector configuration, and it differs from
 `vm/` and `docker/` in three ways that matter:
 
-- **It is pushed, not pulled.** No launcher runs it. `otel/push.sh` runs on your
-  laptop, renders a config for the target's image flavor, ships it over the IAP
-  tunnel and runs `otel/apply.sh` there. Nothing at boot touches it.
+- **It is pushed, not pulled** — and it was the first thing here to be. Nothing
+  on the VM runs it: `otel/push.sh` runs on your laptop, renders a config for the
+  target's image flavor, ships it over the IAP tunnel and runs `otel/apply.sh`
+  there. Nothing at boot touches it.
 - **It is not selected by `APP_NAME`.** The pusher names the target instance
   directly; the flavor comes from the VM's own `/etc/image-manifest.txt`.
 - **There is no `docker/` counterpart, deliberately.** Containers log to stdout
@@ -66,13 +74,28 @@ so a VM with nothing pushed to it collects nothing and sends nowhere. See
 [`otel/README.md`](otel/README.md) and
 [`../build-docs/ops-execution.md`](../build-docs/ops-execution.md).
 
-> **Heads-up on direction.** `otel/` is the first piece of a wider move to
-> push-only: `vm-startup.sh`, the boot-time launcher that clones this repo and
-> runs `vm/<APP_NAME>.sh`, is slated for retirement in favour of pushing app
-> deploys the same way (ops-execution.md Part C). It has **not** happened yet —
-> the boot flow described below is still live and still correct. When it does,
-> `docker-startup.sh` stays, so the `vm/` ↔ `docker/` symmetry below breaks
-> permanently.
+> ## ⚠ `vm-startup.sh` IS GONE — and nothing replaces it yet
+>
+> **Done 2026-09-24** (ops-execution.md Part C): the boot-time launcher that
+> cloned this repo and ran `vm/<APP_NAME>.sh` is deleted, along with its systemd
+> unit and installer, and `dz-ziniapps/vms.tf` no longer sets
+> `APP_NAME`/`APP_ENV`. VMs are push-only. `docker-startup.sh` stays, so the
+> `vm/` ↔ `docker/` symmetry described below is **permanently broken by
+> design** — do not restore the VM launcher for consistency.
+>
+> **The replacement was deliberately NOT built first.** `otel/push.sh` is the
+> only pusher in this repo. Until a `vm/` pusher exists there is **no working
+> way to deploy an app onto a VM**: a new VM serves 404, a reboot no longer
+> redeploys, and recreating an instance does not bring the app back.
+>
+> **Deploying by hand, meanwhile:** copy the whole `vm/` folder (the app script
+> **and** `common.sh` — every script `source`s it) to the instance over the IAP
+> tunnel and run `sudo bash vm/<APP_NAME>.sh <APP_ENV>`. Shipping a single
+> script breaks at the `source` line.
+>
+> **Writing the pusher** is the next job: tar `vm/`, ship it to
+> `/tmp/deployza/repo`, run `vm/<app>.sh <APP_ENV>`. The scripts themselves need
+> no changes — they already take `APP_ENV` as `$1`.
 
 ## Two kinds of app: per-PATH and per-HOST
 
@@ -178,23 +201,23 @@ script is its own `bash` process (the orchestrator runs children via
 `assess-install.sh` sources neither — it deploys nothing, it only invokes the
 children.
 
-**This depends on the launcher cloning the whole repo** (it does — to
-`/tmp/deployza/repo`). A launcher that copied a single script to a host would
-break at the `source` line.
+**This depends on the whole `vm/` folder reaching the host.** A push that
+copied a single script would break at the `source` line — the pusher must ship
+the folder, not the file.
 
 ## Conventions
 
 - `#!/bin/bash` + `set -euo pipefail` at the top of every script.
 - **The script returns when the deploy is done** — it is a deploy step, not a
-  long-running process. On a VM it runs under `vm-startup.service` (`Type=oneshot`,
-  goes `active (exited)`); the real server (Tomcat) is a separate unit. In a
-  container it returns and the entrypoint execs Tomcat.
+  long-running process. On a VM it returns to whoever pushed it; the real server
+  (Tomcat) is a separate systemd unit. In a container it returns and the
+  entrypoint execs Tomcat.
 - **Idempotent**: clear the staging dir, re-download, undeploy the old context,
-  deploy the new one — safe to re-run (a redeploy is "push to GCS, re-run
-  startup"). Never append/duplicate.
+  deploy the new one — safe to re-run (a redeploy is "push to GCS, re-run the
+  script"). Never append/duplicate.
 - **Staging dir** is `${STAGE_ROOT}/<APP_NAME>/` (`/tmp/deployza/<APP_NAME>/`) — this app's sibling of the
-  clone (`/tmp/deployza/repo`), owned by this script. Same path whether launched
-  at boot or run standalone over SSH.
+  scripts themselves (`/tmp/deployza/repo`), owned by this script. Same path
+  whether pushed or run standalone over SSH.
 - Read `install.properties` via the `read_prop` / `require_prop` helpers (last
   matching line wins; surrounding quotes stripped). Use `require_prop` for keys
   that must be non-empty; only `install.mysql.root.password` may be empty.
@@ -213,11 +236,13 @@ break at the `source` line.
    `STAGE_ROOT` or the `NGINX_*` constants locally.
 3. Ensure the app's `conf/` (incl. `install.properties`) + WAR are published to
    `gs://dz-builds/<env>/<app>/`.
-4. Launch a host with metadata/env `APP_NAME=<app>` `APP_ENV=<env>`.
+4. Deploy it: on a VM, push `vm/` to the host and run
+   `vm/<app>.sh <env>`; for a container, start it with env
+   `APP_NAME=<app>` `APP_ENV=<env>`.
 
 ## Gotchas
 
-- `APP_NAME` is **fixed** inside each script, not taken from the launcher — the
+- `APP_NAME` is **fixed** inside each script, not taken from the caller — the
   script is resolved *by* its filename, so the name is already implied. Only
   `APP_ENV` is a runtime argument, and it is **required** (no default — a missing
   value aborts rather than deploying to the wrong environment).

@@ -6,10 +6,11 @@
 #   readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #   source "${SCRIPT_DIR}/common.sh"
 #
-# The launcher clones this WHOLE repo to /tmp/deployza/repo before running
-# <clone>/vm/<APP_NAME>.sh, so this file is always beside the script that
-# sources it. A launcher that copied one script instead of cloning would
-# break — don't introduce one.
+# THE PUSHER MUST SHIP THE WHOLE vm/ FOLDER, not a single script: this file has
+# to be beside the script that sources it. A push that copied only
+# <APP_NAME>.sh would break at the `source` line. (Before 2026-09-24 a baked
+# boot launcher cloned the whole repo, which satisfied this for free; it is now
+# the pusher's job.)
 #
 # THERE IS A SECOND COPY AT docker/common.sh, and that is deliberate: each
 # platform folder is self-contained, the same way vm/<app>.sh and
@@ -46,8 +47,8 @@ readonly GCS_BASE_URL="gs://dz-builds"
 
 # --- Local staging ------------------------------------------------------------
 # Parent of every app's staging dir; each script stages into
-# ${STAGE_ROOT}/${APP_NAME}, the sibling of the launcher's clone
-# (${STAGE_ROOT}/repo). Same path whether launched at boot or run over SSH.
+# ${STAGE_ROOT}/${APP_NAME}, the sibling of the pushed scripts
+# (${STAGE_ROOT}/repo). Same path whether pushed or run by hand over SSH.
 # KEEP IN SYNC WITH docker/common.sh.
 readonly STAGE_ROOT="/tmp/deployza"
 

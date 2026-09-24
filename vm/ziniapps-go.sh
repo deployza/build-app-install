@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# ziniapps-go.sh — app deploy script (the <APP_NAME>.sh that vm-startup.sh clones
-# and runs as a child at boot). ziniapps-go is the landing page for
+# ziniapps-go.sh — app deploy script (the <APP_NAME>.sh that is PUSHED to
+# the VM and run there). ziniapps-go is the landing page for
 # go.ziniapps.com: a STATIC site (no database, no app.properties, no logback, no
 # Tomcat), packaged as a WAR only because that is what its Maven build produces.
 #
@@ -49,7 +49,7 @@ set -euo pipefail
 #   4. writes /etc/nginx/site.d/<site>.conf         (the per-host server block)
 #   5. reloads nginx
 #
-# Contract (see vm-startup.sh): invoked as `<APP_NAME>.sh APP_ENV`.
+# Contract: invoked as `<APP_NAME>.sh APP_ENV`.
 # APP_NAME is fixed to "ziniapps-go" here (this IS that script); the single
 # argument is APP_ENV ("$1").
 #
@@ -88,9 +88,8 @@ set -euo pipefail
 #
 # Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
 # unit. Where its output lands depends on how it is invoked:
-#   * At boot (launched by vm-startup.sh): its output is inherited by the
-#     vm-startup.service unit, so it lands in that journal:
-#       sudo journalctl -u vm-startup.service -b -f
+#   * Pushed (the normal path): its output goes to wherever the pusher ran it —
+#     there is no systemd unit and no journal of its own. Capture it there.
 #   * Run manually over SSH: output goes to your terminal; capture with
 #       sudo bash ziniapps-go.sh <APP_ENV> 2>&1 | tee /tmp/ziniapps-go.log
 #
@@ -110,7 +109,7 @@ set -euo pipefail
 
 # --- Fixed identity -----------------------------------------------------------
 # This script IS the ziniapps-go installer, so APP_NAME is fixed rather than
-# taken from the launcher. (vm-startup.sh resolves this very file by that name —
+# taken from the caller. (The pusher resolves this very file by that name —
 # <clone>/vm/ziniapps-go.sh — so the name is already implied.) Only APP_ENV
 # varies (development/production) and is the sole argument.
 readonly APP_NAME="ziniapps-go"
@@ -202,7 +201,7 @@ default_prop() {
   printf -v "$__var" '%s' "$__val"
 }
 
-# parse_args: validate the launcher contract and set APP_ENV.
+# parse_args: validate the caller's contract and set APP_ENV.
 # APP_ENV is required — refuse to run without it rather than deploying to a
 # wrong default environment.
 parse_args() {
@@ -370,7 +369,7 @@ unpack_war() {
   mkdir -p "$STAGED_DOC_ROOT"
 
   # -q quiet, -o overwrite without prompting (unzip is interactive by default and
-  # would hang a boot-time deploy waiting on stdin).
+  # would hang an unattended deploy waiting on stdin).
   unzip -q -o "$TMP_WAR" -d "$STAGED_DOC_ROOT"
 
   # Servlet-container metadata — not servable content.
@@ -602,10 +601,9 @@ main() {
 
   # Paths that depend only on APP_ENV / APP_NAME.
   INSTALL_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/install"
-  # Staging dir is this app's own sibling of the clone under the shared deploy
-  # root (see vm-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/
-  # <APP_NAME> is ours. Same path whether launched by vm-startup.sh at boot or
-  # run standalone over SSH.
+  # Staging dir is this app's own sibling of the pushed scripts under the shared
+  # deploy root: /tmp/deployza/repo holds the pushed vm/ folder, /tmp/deployza/
+  # <APP_NAME> is ours. Same path whether pushed or run standalone over SSH.
   STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
   INSTALL_PROPS="${STAGE_DIR}/install.properties"
 

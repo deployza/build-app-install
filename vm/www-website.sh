@@ -4,7 +4,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # www-website.sh — app deploy script for the marketing site at
 # www.deployza.com. Run as a child of www-install.sh (the <APP_NAME>.sh that
-# vm-startup.sh clones and runs at boot), and standalone over SSH.
+# pushed to the VM and run there), and standalone over SSH.
 #
 # www-website is a STATIC site (no database, no app.properties, no logback, no
 # Tomcat), packaged as a WAR only because that is what its Maven build produces.
@@ -61,7 +61,7 @@ set -euo pipefail
 #   5. writes /etc/nginx/site.d/<site>.conf         (the per-host server block)
 #   6. reloads nginx
 #
-# Contract (see vm-startup.sh): invoked as `<APP_NAME>.sh APP_ENV`.
+# Contract: invoked as `<APP_NAME>.sh APP_ENV`.
 # APP_NAME is fixed to "www-website" here (this IS that script); the single
 # argument is APP_ENV ("$1").
 #
@@ -88,9 +88,8 @@ set -euo pipefail
 #
 # Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
 # unit. Where its output lands depends on how it is invoked:
-#   * At boot (via www-install.sh, launched by vm-startup.sh): its output is
-#     inherited by the vm-startup.service unit, so it lands in that journal:
-#       sudo journalctl -u vm-startup.service -b -f
+#   * Pushed (the normal path, via www-install.sh): its output goes to wherever
+#     the pusher ran it — no systemd unit, no journal of its own.
 #     www-install.sh also tees a per-child copy to /tmp/deployza/logs/.
 #   * Run manually over SSH: output goes to your terminal; capture with
 #       sudo bash www-website.sh <APP_ENV> 2>&1 | tee /tmp/www-website.log
@@ -107,7 +106,7 @@ set -euo pipefail
 
 # --- Fixed identity -----------------------------------------------------------
 # This script IS the www-website installer, so APP_NAME is fixed rather than
-# taken from the launcher. (vm-startup.sh resolves this very file by that name —
+# taken from the caller. (The pusher resolves this very file by that name —
 # <clone>/vm/www-website.sh — so the name is already implied.) Only APP_ENV
 # varies (development/production) and is the sole argument.
 readonly APP_NAME="www-website"
@@ -197,7 +196,7 @@ default_prop() {
   printf -v "$__var" '%s' "$__val"
 }
 
-# parse_args: validate the launcher contract and set APP_ENV.
+# parse_args: validate the caller's contract and set APP_ENV.
 parse_args() {
   APP_ENV="${1:-}"
   if [[ -z "$APP_ENV" ]]; then
@@ -340,7 +339,7 @@ unpack_war() {
   mkdir -p "$STAGED_DOC_ROOT"
 
   # -q quiet, -o overwrite without prompting (unzip is interactive by default and
-  # would hang a boot-time deploy waiting on stdin).
+  # would hang an unattended deploy waiting on stdin).
   unzip -q -o "$TMP_WAR" -d "$STAGED_DOC_ROOT"
 
   # Servlet-container metadata — not servable content.
@@ -582,7 +581,7 @@ main() {
 
   INSTALL_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/install"
   # Staging dir is this app's own sibling of the clone under the shared deploy
-  # root (see vm-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/
+  # root: /tmp/deployza/repo holds the pushed vm/ folder, /tmp/deployza/
   # <APP_NAME> is ours.
   STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
   INSTALL_PROPS="${STAGE_DIR}/install.properties"

@@ -73,9 +73,8 @@ set -euo pipefail
 #
 # Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
 # unit. Where its output lands depends on how it is invoked:
-#   * At boot (launched by vm-startup.sh): its output is inherited by the
-#     vm-startup.service unit, so it lands in that journal:
-#       sudo journalctl -u vm-startup.service -b -f
+#   * Pushed (the normal path): its output goes to wherever the pusher ran it —
+#     there is no systemd unit and no journal of its own. Capture it there.
 #   * Run manually over SSH: output goes to your terminal; capture with
 #       sudo bash assess-server.sh <APP_ENV> 2>&1 | tee /tmp/assess-server.log
 #
@@ -176,7 +175,7 @@ require_prop() {
   printf -v "$__var" '%s' "$__val"
 }
 
-# parse_args: validate the launcher contract and set APP_ENV.
+# parse_args: validate the caller's contract and set APP_ENV.
 # APP_ENV is required — refuse to run without it rather than deploying to a
 # wrong default environment.
 parse_args() {
@@ -476,10 +475,9 @@ main() {
 
   # Paths that depend only on APP_ENV / APP_NAME.
   INSTALL_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/install"
-  # Staging dir is this app's own sibling of the clone under the shared deploy
-  # root (see vm-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/
-  # <APP_NAME> is ours. Same path whether launched by vm-startup.sh at boot or
-  # run standalone over SSH.
+  # Staging dir is this app's own sibling of the pushed scripts under the shared
+  # deploy root: /tmp/deployza/repo holds the pushed vm/ folder, /tmp/deployza/
+  # <APP_NAME> is ours. Same path whether pushed or run standalone over SSH.
   STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
   INSTALL_PROPS="${STAGE_DIR}/install.properties"
 

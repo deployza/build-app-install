@@ -103,7 +103,7 @@ CONF_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/conf"
 # holds only the current deploy's artifacts. The conf/ contents and the WAR share
 # this one dir — the WAR's filename (install.war) never collides with a conf file.
 # This app's own sibling of the clone under the shared deploy root (see
-# vm-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/<APP_NAME> is ours.
+# docker-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/<APP_NAME> is ours.
 STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
 
 # -----------------------------

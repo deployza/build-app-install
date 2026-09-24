@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# ziniapps-www.sh — app deploy script (the <APP_NAME>.sh that vm-startup.sh
-# clones and runs as a child at boot). ziniapps-www is the public marketing site
+# ziniapps-www.sh — app deploy script (the <APP_NAME>.sh that is PUSHED
+# to the VM and run there). ziniapps-www is the public marketing site
 # for www.ziniapps.com: a STATIC site (no database, no app.properties, no
 # logback, no Tomcat), packaged as a WAR only because that is what its Maven
 # build produces.
@@ -30,8 +30,8 @@ set -euo pipefail
 #   not an oversight; see write_nginx_conf.
 #
 # They are kept as separate scripts rather than one parameterised script for the
-# same reason vm/ and docker/ are separate: the launcher resolves a script BY
-# APP_NAME, so each app needs its own file regardless, and a shared one behind a
+# same reason vm/ and docker/ are separate: a script is resolved BY APP_NAME,
+# so each app needs its own file regardless, and a shared one behind a
 # flag would hide precisely the difference above.
 #
 # What this script does:
@@ -41,7 +41,7 @@ set -euo pipefail
 #   4. writes /etc/nginx/site.d/<site>.conf         (the per-host server block)
 #   5. reloads nginx
 #
-# Contract (see vm-startup.sh): invoked as `<APP_NAME>.sh APP_ENV`.
+# Contract: invoked as `<APP_NAME>.sh APP_ENV`.
 # APP_NAME is fixed to "ziniapps-www" here (this IS that script); the single
 # argument is APP_ENV ("$1").
 #
@@ -73,9 +73,8 @@ set -euo pipefail
 #
 # Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
 # unit. Where its output lands depends on how it is invoked:
-#   * At boot (launched by vm-startup.sh): its output is inherited by the
-#     vm-startup.service unit, so it lands in that journal:
-#       sudo journalctl -u vm-startup.service -b -f
+#   * Pushed (the normal path): its output goes to wherever the pusher ran it —
+#     there is no systemd unit and no journal of its own. Capture it there.
 #   * Run manually over SSH: output goes to your terminal; capture with
 #       sudo bash ziniapps-www.sh <APP_ENV> 2>&1 | tee /tmp/ziniapps-www.log
 #
@@ -91,7 +90,7 @@ set -euo pipefail
 
 # --- Fixed identity -----------------------------------------------------------
 # This script IS the ziniapps-www installer, so APP_NAME is fixed rather than
-# taken from the launcher. (vm-startup.sh resolves this very file by that name —
+# taken from the caller. (The pusher resolves this very file by that name —
 # <clone>/vm/ziniapps-www.sh — so the name is already implied.) Only APP_ENV
 # varies (development/production) and is the sole argument.
 readonly APP_NAME="ziniapps-www"
@@ -185,7 +184,7 @@ default_prop() {
   printf -v "$__var" '%s' "$__val"
 }
 
-# parse_args: validate the launcher contract and set APP_ENV.
+# parse_args: validate the caller's contract and set APP_ENV.
 parse_args() {
   APP_ENV="${1:-}"
   if [[ -z "$APP_ENV" ]]; then
@@ -325,7 +324,7 @@ unpack_war() {
   mkdir -p "$STAGED_DOC_ROOT"
 
   # -q quiet, -o overwrite without prompting (unzip is interactive by default and
-  # would hang a boot-time deploy waiting on stdin).
+  # would hang an unattended deploy waiting on stdin).
   unzip -q -o "$TMP_WAR" -d "$STAGED_DOC_ROOT"
 
   # Servlet-container metadata — not servable content.
@@ -551,7 +550,7 @@ main() {
 
   INSTALL_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/install"
   # Staging dir is this app's own sibling of the clone under the shared deploy
-  # root (see vm-startup.sh): /tmp/deployza/repo is the clone, /tmp/deployza/
+  # root: /tmp/deployza/repo holds the pushed vm/ folder, /tmp/deployza/
   # <APP_NAME> is ours.
   STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
   INSTALL_PROPS="${STAGE_DIR}/install.properties"

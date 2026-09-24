@@ -7,8 +7,8 @@ set -euo pipefail
 # exit 0
 
 # -----------------------------------------------------------------------------
-# assess-install.sh — ORCHESTRATOR. This is the <APP_NAME>.sh that vm-startup.sh
-# clones and runs as a child at boot (APP_NAME="assess-install"). It does NOT
+# assess-install.sh — ORCHESTRATOR. This is the <APP_NAME>.sh the pusher ships
+# and runs (APP_NAME="assess-install"). It does NOT
 # deploy anything itself; it installs every app that belongs on this VM by
 # invoking, in order:
 #
@@ -33,8 +33,8 @@ set -euo pipefail
 # means every reload along the way tests a complete config, and a first boot
 # never has a window where go.ziniapps.com/assess-ui/ 404s.
 #
-# Contract (see vm-startup.sh): invoked as `assess-install.sh APP_ENV`.
-# APP_NAME is fixed to "assess-install" here (vm-startup.sh resolves this file by
+# Contract: invoked as `assess-install.sh APP_ENV`.
+# APP_NAME is fixed to "assess-install" here (the pusher resolves this file by
 # that name — <clone>/vm/assess-install.sh); the single argument is APP_ENV,
 # which is passed through verbatim to every child.
 #
@@ -44,14 +44,14 @@ set -euo pipefail
 # hidden).
 #
 # Logs — like the child scripts, this only echoes to stdout/stderr. At boot its
-# output (and the children's) is inherited by vm-startup.service:
-#   sudo journalctl -u vm-startup.service -b -f
+# output (and the children's) goes wherever the pusher ran it — there is no
+# systemd unit and no journal of its own.
 # Run manually over SSH:
 #   sudo bash assess-install.sh <APP_ENV> 2>&1 | tee /tmp/assess.log
 # -----------------------------------------------------------------------------
 
 # Directory this script lives in, so the children are found regardless of CWD
-# (the launcher clones to /tmp/deployza/repo and runs us from there).
+# (the pusher ships vm/ to /tmp/deployza/repo and runs us from there).
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The child deploy scripts, run in this order. The first three are per-PATH apps
@@ -68,7 +68,7 @@ readonly CHILD_SCRIPTS=(
 # Per-child log dir (a sibling of the clone under the deploy root:
 # /tmp/deployza/repo is the clone, /tmp/deployza/logs is ours). This orchestrator
 # does NOT keep a log file of its own — its output goes straight to stdout/stderr
-# so the boot-time vm-startup.service journal captures the whole run. What the log
+# so the pusher's own output captures the whole run. What the log
 # dir is for is a per-child FILE copy for manual inspection: each child's output
 # is tee'd to both stdout (→ journald) and ${LOG_DIR}/<basename>.log (see
 # run_child). The child scripts know NOTHING about logging — they just echo.
@@ -107,7 +107,7 @@ run_child() {
   fi
 }
 
-# parse_args: validate the launcher contract and echo APP_ENV.
+# parse_args: validate the caller's contract and echo APP_ENV.
 # APP_ENV is required — refuse to run without it rather than deploying to a
 # wrong default environment.
 parse_args() {
@@ -140,7 +140,7 @@ main() {
     # We invoke children via `bash "$child_path"` (in run_child), which needs only
     # read permission — the execute bit is not load-bearing here. Set it anyway so
     # a child stays runnable standalone (`./assess-server.sh`), mirroring the +x
-    # vm-startup.sh applies to this orchestrator.
+    # the pusher applies to this orchestrator.
     chmod +x "$child_path" 2>/dev/null || true
 
     echo
