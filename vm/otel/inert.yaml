@@ -1,0 +1,39 @@
+# inert.yaml — COLLECT NOTHING, SEND NOWHERE. This is what `push.sh
+# --exporter none` ships, and it is how a VM is taken OUT of monitoring without
+# rebuilding its image.
+#
+# IT IS TOOLING, NOT CONTENT, which is why it sits here beside the scripts
+# rather than in systems/ or instances/. Every other config is assembled from a
+# host's pipeline.yaml plus its flavor's receiver fragments; this one is
+# deliberately assembled from nothing, so that a host with no
+# instances/<name>/ folder at all can still be pushed to. The `mcp` VM in
+# dz-builds is the one such host today.
+#
+# It is shipped through the same apply path as a real config — same restart,
+# same settle window, same rollback — so "off" is exercised rather than
+# special-cased. It is COMPLETE: no tokens, nothing spliced.
+#
+# A collector running this stays UP and reports nothing wrong. That is not a bug
+# and it is the reason "up" never means shipping; see the README's gotchas.
+#
+# NO EXTENSIONS, matching every other config in the tree. apply.sh decides a
+# push worked by watching the systemd unit stay active, not by polling a health
+# endpoint, so this file needs nothing for that.
+
+receivers:
+  # A pipeline needs at least one of each to be valid, so the nop components
+  # stand in. They read nothing and write nothing.
+  nop:
+
+exporters:
+  nop:
+
+service:
+  pipelines:
+    logs:
+      receivers: [nop]
+      exporters: [nop]
+
+  telemetry:
+    logs:
+      level: info

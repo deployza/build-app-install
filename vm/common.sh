@@ -3,10 +3,22 @@
 # IT SITS AT THE vm/ ROOT, above the three layer folders. vm/ is organised by
 # LAYER, not by product:
 #
-#   vm/apps/<app>/<app>.sh        install one app
-#   vm/systems/<server>.yaml      what to collect on a given server
-#   vm/instances/<vm>/install.sh        install everything one HOST runs
-#   vm/instances/<vm>/exporter.yaml     where that host's logs go (one per VM)
+#   vm/apps/<app>/<app>.sh          install one app
+#   vm/apps/<app>/receiver.yaml     what that app writes, when it writes
+#                                   somewhere no system fragment reaches
+#                                   (assess-server only, today)
+#   vm/systems/<server>.yaml        what a given server writes — RECEIVERS ONLY
+#   vm/systems/_base.yaml           journald + hostmetrics; every host, always
+#   vm/instances/<vm>/install.sh    install everything one HOST runs
+#   vm/instances/<vm>/exporter.yaml that host's processors AND exporters
+#   vm/instances/<vm>/pipeline.yaml that host's service graph — one pipeline
+#                                   per service, hand-written
+#
+# THE OTEL SPLIT IS RECEIVERS VS EVERYTHING ELSE. apps/ and systems/ say what a
+# piece of software writes and where — true on every host that runs it.
+# instances/ says what one host does with it, because a VM runs ONE collector
+# with ONE config.yaml and therefore one set of resource attributes and exactly
+# one destination. vm/otel/push.sh assembles the two.
 #
 # There is exactly ONE common.sh for all of them: these values are owned by the
 # infrastructure, not by an app, so a bucket change stays a single edit.

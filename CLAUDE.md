@@ -37,12 +37,15 @@ One script per app **per platform**:
 build-app-install/
 ├── vm/                    # organised by LAYER, not by product
 │   ├── common.sh          # ONE copy at the vm/ ROOT, sourced as ../../common.sh
-│   ├── apps/<app>/<app>.sh        # install ONE app (+ its otel yaml, if any)
-│   ├── systems/<server>.yaml      # what to collect on a server: tomcat, nginx,
-│   │                              #   nginx-python, mysql, mcp
+│   ├── apps/<app>/<app>.sh        # install ONE app
+│   ├── apps/<app>/receiver.yaml   # what that app writes (assess-server only)
+│   ├── systems/_base.yaml         # journald + hostmetrics — every host
+│   ├── systems/<server>.yaml      # what a server writes — RECEIVERS ONLY:
+│   │                              #   tomcat, nginx, mysql, mcp
 │   ├── instances/<vm>/
 │   │   ├── install.sh             # install everything ONE HOST runs
-│   │   └── exporter.yaml          # where that host's logs go — ONE per VM
+│   │   ├── exporter.yaml          # that host's processors AND exporters
+│   │   └── pipeline.yaml          # that host's service graph
 │   └── otel/              # TOOLING, not an app: push.sh + apply.sh
 └── docker/
     ├── common.sh          # constants SOURCED by every docker/ script
@@ -62,7 +65,7 @@ three different questions, and keeping them apart is the point:
 |---|---|---|
 | `vm/apps/` | what does this **app** need to install? | app name |
 | `vm/systems/` | what logs does this **server** produce? | tomcat, nginx, mysql, … |
-| `vm/instances/` | what runs on this **host**, and where do its logs go? | VM name |
+| `vm/instances/` | what runs on this **host**, how are its records stamped, and where do they go? | VM name |
 
 A product (`assess`, `ziniapps`) is not a folder anywhere: it is a set of apps
 that a host happens to run, and `vm/instances/<vm>/install.sh` is the only place that
@@ -79,15 +82,30 @@ and deploys the WAR under the stable name `<ctx>.war` (serving at `/<ctx>`).
 ## `vm/otel/` is tooling, not an app — read this before treating it like one
 
 [`vm/otel/`](vm/otel/) breaks the "one script per app" shape of its siblings, on
-purpose. It holds no content at all — just the two scripts that render, ship and
-apply an OpenTelemetry Collector config — and it differs from the other `vm/`
-folders in three ways that matter:
+purpose. It holds the two scripts that assemble, ship and apply an
+OpenTelemetry Collector config, plus `inert.yaml` (the "collect nothing" config
+that `--exporter none` ships) — and it differs from the other `vm/` folders in
+three ways that matter:
 
 - **It is pushed, not pulled** — and it was the first thing here to be. Nothing
-  on the VM runs it: `vm/otel/push.sh` runs on your laptop, splices
-  `vm/systems/<flavor>.yaml` with `vm/instances/<vm>/exporter.yaml`, ships the result
-  over the IAP tunnel and runs `vm/otel/apply.sh` there. Nothing at boot touches
-  it.
+  on the VM runs it: `vm/otel/push.sh` runs on your laptop, assembles
+  `vm/instances/<vm>/pipeline.yaml` from that VM's `exporter.yaml` and one
+  `vm/systems/` receiver fragment per token in the target's image flavor, ships
+  the result over the IAP tunnel and runs `vm/otel/apply.sh` there. Nothing at
+  boot touches it.
+- **The otel files split by kind of statement, not by server.** `vm/systems/`
+  and `vm/apps/` hold **receivers only** — what a piece of software writes, true
+  on every host that runs it. `vm/instances/<vm>/exporter.yaml` holds the
+  processors and exporters, and `pipeline.yaml` the service graph, because a VM
+  runs one collector with one `config.yaml`.
+- **A "service" is one pipeline, one `service.name`, one destination**, declared
+  in two halves: a `logs/<name>` pipeline in `pipeline.yaml` and a matching
+  `resource/<name>` processor in `exporter.yaml`. The pipelines are hand-written;
+  `push.sh` checks them against the receivers it assembled. Records carry exactly
+  three resource attributes — `service.name`, `host.name`, `host.project`.
+- **The destination is Google Pub/Sub, authenticated by IAM.** Two topics, and
+  the VM's attached service account is the publisher, so there are no
+  credentials in this repo and nothing renders a `${env:}` reference.
 - **It is not selected by `APP_NAME`.** The pusher names the target instance
   directly; the flavor comes from the VM's own `/etc/image-manifest.txt`.
 - **There is no `docker/` counterpart, deliberately.** Containers log to stdout

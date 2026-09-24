@@ -5,8 +5,8 @@
 #   sudo /opt/otel/apply.sh <rendered-config.yaml> [env-file]
 #
 # It swaps /etc/otelcol/config.yaml for the config it is handed, restarts the
-# collector, and rolls back if the restarted collector does not come up healthy.
-# That is the whole job.
+# collector, and rolls back if the restarted collector does not STAY up. That is
+# the whole job.
 #
 # WHAT IT DELIBERATELY DOES NOT DO:
 #
@@ -18,8 +18,8 @@
 #     already rendered and (where the binary was available) already validated;
 #     re-running it here would only re-answer a question asked upstream. It
 #     cannot see a missing log dir, a bad credential or a busy port anyway —
-#     the post-restart health check below catches all three, and those are the
-#     failures that actually happen on a target.
+#     the post-restart settle window below catches a collector that dies of any
+#     of them, and those are the failures that actually happen on a target.
 set -euo pipefail
 
 log() { echo "[otel-apply] $*"; }
@@ -29,12 +29,11 @@ readonly OTELCOL_BIN=/opt/otelcol/bin/otelcol-contrib
 readonly CONF=/etc/otelcol/config.yaml
 readonly ENVFILE=/etc/otelcol/env
 readonly BACKUP_DIR=/etc/otelcol/backup
-readonly HEALTH_URL=http://127.0.0.1:13133
 
-# How long to wait for the collector to report healthy after a restart. It has
-# to open its exporters (which may do a TLS handshake against ELK or ClickHouse)
-# before the health endpoint answers, so this is seconds, not milliseconds.
-readonly HEALTH_TIMEOUT=30
+# How long the collector must STAY up after a restart before we call the push
+# good. See the verify step below for why this is a settle window rather than a
+# poll: there is no health endpoint to poll any more.
+readonly SETTLE_SECONDS=15
 
 NEW_CONFIG="${1:-}"
 NEW_ENVFILE="${2:-}"
@@ -50,7 +49,7 @@ NEW_ENVFILE="${2:-}"
 # -----------------------------------------------------------------------------
 # THE SINGLE MOST COMMON SILENT FAILURE. Without these the receiver gets EACCES
 # on its log source, says so exactly once at startup, and then looks perfectly
-# healthy forever while shipping nothing. The health check below will NOT catch
+# healthy forever while shipping nothing. The settle window below will NOT catch
 # it: the collector is genuinely fine, it just cannot read anything.
 #
 # Attempted unconditionally, guarded by `getent`, rather than driven by the
@@ -97,10 +96,11 @@ ls -1t "${BACKUP_DIR}"/config.yaml.* 2>/dev/null | tail -n +11 | xargs -r rm -f
 install -o root -g otelcol -m 640 "$NEW_CONFIG" "$CONF"
 log "installed new config"
 
-# The env file carries the exporter endpoint and its credentials, referenced
-# from the config as ${env:OTEL_*}. 640 root:otelcol — the collector reads it,
-# nobody else does. Absent is legal: a config with no ${env:} references (the
-# inert base, or a local-only pipeline) needs none.
+# The env file used to carry the exporter endpoint and its credentials. NOTHING
+# THE TREE RENDERS TODAY REFERENCES ${env:} AT ALL: Pub/Sub authenticates with
+# the VM's attached service account, service.name is stamped per pipeline, and
+# deployment.environment is no longer sent. The flag and this block survive for
+# a config that needs one again; absent is the normal case.
 if [[ -n "$NEW_ENVFILE" ]]; then
   [[ -f "$NEW_ENVFILE" ]] || die "env file not found: $NEW_ENVFILE"
   install -o root -g otelcol -m 640 "$NEW_ENVFILE" "$ENVFILE"
@@ -134,37 +134,46 @@ if ! systemctl restart otelcol.service; then
   die "collector failed to restart; previous state restored where possible"
 fi
 
-# Poll the health_check extension. Every config we push declares it on
-# 127.0.0.1:13133 — see otelcol-base.yaml in build-vm-images. A config that
-# omits it will be rolled back here even if it is perfectly good, which is the
-# intended trade: we will not leave a box in a state we cannot confirm.
-log "waiting up to ${HEALTH_TIMEOUT}s for health endpoint"
-healthy=false
-for _ in $(seq "$HEALTH_TIMEOUT"); do
-  # The unit dying mid-wait is a definite answer; stop waiting for the timeout.
+# THIS CHECK IS WEAKER THAN IT USED TO BE, AND DELIBERATELY SO. It polled the
+# health_check extension on 127.0.0.1:13133; the configs no longer declare any
+# extensions, so there is nothing to poll and this falls back to systemd.
+#
+# WHAT THAT COSTS: `systemctl restart` returns as soon as the process is up,
+# BEFORE otelcol has parsed its config and built its pipelines. A config that is
+# valid YAML but names a component that does not exist starts, fails, and exits
+# a second or two later. So a single is-active immediately after the restart
+# would call almost any broken config a success.
+#
+# Hence a SETTLE WINDOW rather than a poll: the unit must be active continuously
+# for SETTLE_SECONDS. That catches a collector that starts and then dies, which
+# is the failure the config changes actually produce.
+#
+# WHAT IT STILL DOES NOT CATCH, and the health endpoint did not either: a
+# collector that comes up perfectly and ships nothing, because a receiver got
+# EACCES on its log source. Only the journal shows that — see the closing note.
+log "waiting ${SETTLE_SECONDS}s for the collector to settle"
+settled=true
+for _ in $(seq "$SETTLE_SECONDS"); do
   if ! systemctl is-active --quiet otelcol.service; then
-    log "unit went inactive while waiting"
-    break
-  fi
-  if curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
-    healthy=true
+    log "unit went inactive during the settle window"
+    settled=false
     break
   fi
   sleep 1
 done
 
-if [[ "$healthy" != true ]]; then
-  log "health check FAILED after ${HEALTH_TIMEOUT}s"
+if [[ "$settled" != true ]]; then
+  log "collector did not stay up for ${SETTLE_SECONDS}s"
   journalctl -u otelcol.service -n 30 --no-pager || true
   rollback
-  die "collector did not become healthy; previous state restored where possible"
+  die "collector did not stay up; previous state restored where possible"
 fi
 
 
 # -----------------------------------------------------------------------------
 # Report
 # -----------------------------------------------------------------------------
-log "collector healthy"
+log "collector up and stable for ${SETTLE_SECONDS}s"
 log "config:  ${CONF}"
 log "  $(head -n 1 "$CONF")"
 log "groups:  $(id -nG otelcol)"
@@ -174,6 +183,6 @@ grep -A2 '^  pipelines:' "$CONF" | sed 's/^/  /' || true
 # A healthy collector reading NOTHING looks identical from out here to one
 # shipping millions of lines. Point at the one place that tells them apart.
 log ""
-log "Healthy does not mean shipping. Verify with:"
+log "Up does not mean shipping. Verify with:"
 log "  sudo journalctl -u otelcol -b | grep -i 'error\\|permission\\|denied'"
 exit 0

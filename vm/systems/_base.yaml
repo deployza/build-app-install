@@ -1,0 +1,49 @@
+# receivers: journald, hostmetrics
+#
+# THE RECEIVERS EVERY HOST GETS, spliced into every render ahead of the flavor's
+# own fragments. They are factored out here rather than repeated in each
+# systems/<server>.yaml because a combined flavor splices SEVERAL fragments into
+# one `receivers:` map — and a key declared twice in that map is a duplicate
+# key, which is a YAML error, not a merge.
+#
+# The leading `# receivers:` line is LOAD-BEARING: push.sh reads it to check
+# that no two fragments declare the same key, and to check that every receiver a
+# pipeline names actually exists. The header is STRIPPED at render time;
+# comments INSIDE the block are kept, because they end up in config.yaml on the
+# VM where they are wanted.
+#
+# The underscore keeps the filename out of the flavor namespace: flavors are
+# split on `-`, and no flavor token can be `_base`.
+#
+# BOTH OF THESE ARE HOST-LEVEL, NOT APP-LEVEL, and each gets its own pipeline in
+# every instance's pipeline.yaml — `logs/journal` and `metrics/host`. Nothing
+# else in the tree collects the OS.
+
+  # Everything that logs to systemd: the OS, every service unit on the box, and
+  # any application that logs to stdout rather than to a file. Apps SHOULD log
+  # to stdout - every one that does needs no receiver of its own here.
+  #
+  # This is also where the collector's OWN startup errors land, which is the one
+  # place an EACCES on a log source is ever reported. Losing this receiver means
+  # losing the ability to debug the others.
+  journald:
+    directory: /var/log/journal
+
+  # THE ONLY METRICS SOURCE IN THE TREE. Everything else here is logs.
+  #
+  # 60s, not the 10s default: these are host vitals for answering "was the box
+  # sick at 3am", not a scheduler's input. Six scrapers at 10s is a surprising
+  # number of points per day per host to pay Pub/Sub and the destination for.
+  hostmetrics:
+    collection_interval: 60s
+    scrapers:
+      cpu:
+      load:
+      memory:
+      paging:
+      network:
+      # Disk vs filesystem: `disk` is I/O (reads, writes, time), `filesystem` is
+      # capacity (used, free). The second is what actually pages someone at 3am,
+      # so both are on.
+      disk:
+      filesystem:
