@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# vms/www-vm/install.sh — ORCHESTRATOR for the www.deployza.com host. This is
+# instances/www-vm/install.sh — ORCHESTRATOR for the www.deployza.com host. This is
 # the script that is PUSHED to the VM and run there
 # (APP_NAME="www-install"). It does NOT deploy anything itself; it installs
 # every app that belongs on this VM by invoking, in order:
@@ -15,7 +15,7 @@ set -euo pipefail
 # Both children live under vm/apps/<app>/ like every other app, so CHILD_SCRIPTS
 # below reaches them as ../../apps/<app>/<app>.sh.
 #
-# Same shape as vms/ziniapps-vm/install.sh — see that file for the pattern this follows.
+# Same shape as instances/ziniapps-vm/install.sh — see that file for the pattern this follows.
 #
 # WHY TWO CHILDREN RATHER THAN ONE SCRIPT. These two used to be a single
 # www-website.sh. They share a hostname and nothing else: the site is a WAR
@@ -41,16 +41,16 @@ set -euo pipefail
 # transient network/secret/mkdocs problem never takes this host's deploy down.
 # See refresh_docs_now in that script.
 #
-# Contract: invoked as `vms/www-vm/install.sh APP_ENV`.
+# Contract: invoked as `instances/www-vm/install.sh APP_ENV`.
 # APP_NAME is fixed to "www-install" here (the pusher resolves this file by
-# that name — <clone>/vm/vms/www-vm/install.sh); the single argument is
+# that name — <clone>/vm/instances/www-vm/install.sh); the single argument is
 # APP_ENV, which is passed through verbatim to every child.
 #
 # Logs — like the child scripts, this only echoes to stdout/stderr. At boot its
 # output (and the children's) goes wherever the pusher ran it — there is no
 # systemd unit and no journal of its own.
 # Run manually over SSH:
-#   sudo bash vms/www-vm/install.sh <APP_ENV> 2>&1 | tee /tmp/www-install.log
+#   sudo bash instances/www-vm/install.sh <APP_ENV> 2>&1 | tee /tmp/www-install.log
 # -----------------------------------------------------------------------------
 
 # Directory this script lives in, so the children are found regardless of CWD

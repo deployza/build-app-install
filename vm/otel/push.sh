@@ -9,24 +9,26 @@
 # It renders a complete collector config for the target's image flavor, ships
 # this directory over the IAP tunnel, and runs apply.sh there.
 #
-# WHERE THE PIECES LIVE. This folder holds only the tooling. The content is in
-# the vm/ tree, which is organised by LAYER:
-#   vm/systems/<server>.yaml         what to collect — one per server (tomcat,
+# WHERE THE PIECES LIVE. This folder holds only the tooling. It sits inside the
+# vm/ tree because Otel on a VM is a VM concern — there is no docker/ equivalent
+# (containers log to stdout and the runtime collects it). Its siblings hold the
+# content, organised by LAYER:
+#   ../systems/<server>.yaml         what to collect — one per server (tomcat,
 #                                    nginx, nginx-python, mysql, mcp)
-#   vm/vms/<vm>/exporter.yaml        where to send it — one per VM
-#   vm/apps/<app>/<app>.sh           the app deploys, not used by this script
+#   ../instances/<vm>/exporter.yaml        where to send it — one per VM
+#   ../apps/<app>/<app>.sh           the app deploys, not used by this script
 #
 # WHY THE PUSHER RENDERS. The pusher already knows which VM it picked, so it
 # knows the flavor; making the target work that out again would be a second
 # source of truth that can drift from the first. See
-# ../../build-docs/ops-execution.md, "No host probing".
+# ../../../build-docs/ops-execution.md, "No host probing".
 #
 # RENDERING IS TWO TOKEN SUBSTITUTIONS, not a template language: @EXPORTER@ and
 # @EXPORTER_NAME@ in configs/<flavor>.yaml are replaced from an exporter file.
 # Same convention as @INSTANCE_DIR@ in build-vm-images' tomcat.service.
 #
 # THE EXPORTER COMES FROM THE VM. `--vm <name>` splices
-# ../vm/vms/<name>/exporter.yaml — that host's exporter, with its own endpoint,
+# ../instances/<name>/exporter.yaml — that host's exporter, with its own endpoint,
 # credentials and index. ONE PER VM is not a convention but a constraint: a VM
 # runs one collector with one config.yaml, so it has exactly one destination and
 # every app on it ships through that.
@@ -35,14 +37,14 @@
 # the inert config that takes a VM out of monitoring. Any other value is an
 # error pointing at --vm. --vm and --exporter are mutually exclusive.
 #
-# A TARGET WITH NO vm/vms/<name>/ FOLDER can only be pushed inert. The `mcp` VM
-# in dz-builds is the one such host today: vm/systems/mcp.yaml says what to
-# collect, but nothing says where to send it. Give it vm/vms/mcp/exporter.yaml
+# A TARGET WITH NO ../instances/<name>/ FOLDER can only be pushed inert. The `mcp` VM
+# in dz-builds is the one such host today: ../systems/mcp.yaml says what to
+# collect, but nothing says where to send it. Give it ../instances/mcp/exporter.yaml
 # when it needs to ship logs.
 #
 # ONE COLLECTOR PER VM, so ONE exporter per VM. That is why exporters are keyed
 # by host: ziniapps-vm runs the three assess apps and the two ziniapps sites,
-# and all five ship through vm/vms/ziniapps-vm/exporter.yaml. Telling their
+# and all five ship through ../instances/ziniapps-vm/exporter.yaml. Telling their
 # lines apart is a query concern — every record carries service.name,
 # deployment.environment, image.flavor and log.type.
 #
@@ -104,7 +106,7 @@ fi
 # VM name fails instantly instead of after an SSH to the target.
 EXPORTER_SRC=""
 if [[ -n "$VM" ]]; then
-  EXPORTER_SRC="${SCRIPT_DIR}/../vm/vms/${VM}/exporter.yaml"
+  EXPORTER_SRC="${SCRIPT_DIR}/../instances/${VM}/exporter.yaml"
   [[ -f "$EXPORTER_SRC" ]] || die "unknown vm '${VM}' (expected ${EXPORTER_SRC})"
 fi
 
@@ -123,7 +125,7 @@ FLAVOR="$("${SSH[@]}" --command 'sed -n "s/^image-flavor:[[:space:]]*//p" /etc/i
 [[ -n "$FLAVOR" ]] || die "could not read image-flavor from /etc/image-manifest.txt on ${INSTANCE}"
 log "flavor: ${FLAVOR}"
 
-CONFIG_SRC="${SCRIPT_DIR}/../vm/systems/${FLAVOR}.yaml"
+CONFIG_SRC="${SCRIPT_DIR}/../systems/${FLAVOR}.yaml"
 [[ -f "$CONFIG_SRC" ]] || die "no system config for flavor '${FLAVOR}' (expected ${CONFIG_SRC})"
 
 
@@ -171,7 +173,7 @@ fi
 # awk, not sed: the exporter block is multi-line, and sed's handling of
 # newlines in a replacement is a portability trap not worth stepping in.
 #
-# MATCHING IS ANCHORED, and that is load-bearing. Every vm/systems/<server>.yaml
+# MATCHING IS ANCHORED, and that is load-bearing. Every ../systems/<server>.yaml
 # opens with a header that names both tokens in prose:
 #
 #   # A COMPLETE collector config, except for two tokens (@EXPORTER@ and

@@ -5,8 +5,8 @@
 #
 #   vm/apps/<app>/<app>.sh        install one app
 #   vm/systems/<server>.yaml      what to collect on a given server
-#   vm/vms/<vm>/install.sh        install everything one HOST runs
-#   vm/vms/<vm>/exporter.yaml     where that host's logs go (one per VM)
+#   vm/instances/<vm>/install.sh        install everything one HOST runs
+#   vm/instances/<vm>/exporter.yaml     where that host's logs go (one per VM)
 #
 # There is exactly ONE common.sh for all of them: these values are owned by the
 # infrastructure, not by an app, so a bucket change stays a single edit.
@@ -19,7 +19,7 @@
 #
 # THE PUSHER MUST SHIP THE WHOLE vm/ TREE, not a single script and not a single
 # folder: this file has to be two levels above the app that sources it, and
-# vm/vms/<vm>/install.sh reaches sideways into vm/apps/. A push that copied only
+# vm/instances/<vm>/install.sh reaches sideways into vm/apps/. A push that copied only
 # <APP_NAME>.sh would break at the `source` line. (Before 2026-09-24 a baked boot launcher cloned the whole
 # repo, which satisfied this for free; it is now the pusher's job.)
 #
@@ -41,7 +41,7 @@
 # sites). Those stay in the script that owns them.
 #
 # Everything here is `readonly`: each deploy script is its own `bash` process
-# (a vms/<vm>/install.sh orchestrator runs children via `bash <child>`),
+# (a instances/<vm>/install.sh orchestrator runs children via `bash <child>`),
 # so the file is sourced exactly once per process and a re-source cannot
 # collide. The orchestrators themselves do not source this — they deploy
 # nothing, they only invoke the children.

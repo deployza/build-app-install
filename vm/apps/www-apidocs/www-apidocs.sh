@@ -10,7 +10,7 @@ set -euo pipefail
 # at a path under it. They share nothing but a hostname — different content,
 # different source (a GCS artifact vs. a git checkout built on this VM),
 # different update trigger (a WAR release vs. a docs commit) — so they are now
-# two scripts, run together by vms/www-vm/install.sh.
+# two scripts, run together by instances/www-vm/install.sh.
 #
 # THIS IS A per-PATH APP (see this repo's CLAUDE.md — "Two kinds of app"): it
 # writes BARE LOCATION BLOCKS to /etc/nginx/app.d/, never a server{} block. The
@@ -20,7 +20,7 @@ set -euo pipefail
 # neither overwrites the other.
 #
 # Ordering is NOT load-bearing: nginx resolves the app.d include at reload time,
-# not at write time, so either script may run first. vms/www-vm/install.sh runs the
+# not at write time, so either script may run first. instances/www-vm/install.sh runs the
 # site first anyway, so that every reload along the way tests a complete config.
 #
 # WHAT THIS SCRIPT DEPLOYS — AND WHERE IT COMES FROM
@@ -69,9 +69,9 @@ set -euo pipefail
 #
 # Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
 # unit. Where its output lands depends on how it is invoked:
-#   * Pushed (the normal path, via vms/www-vm/install.sh): its output goes to wherever
+#   * Pushed (the normal path, via instances/www-vm/install.sh): its output goes to wherever
 #     the pusher ran it — no systemd unit, no journal of its own.
-#     vms/www-vm/install.sh also tees a per-child copy to /tmp/deployza/logs/.
+#     instances/www-vm/install.sh also tees a per-child copy to /tmp/deployza/logs/.
 #   * Run manually over SSH: output goes to your terminal; capture with
 #       sudo bash apps/www-apidocs/www-apidocs.sh <APP_ENV> 2>&1 | tee /tmp/www-apidocs.log
 #
@@ -250,7 +250,7 @@ prepare_docs_root() {
 # re-run to update" model every app here follows (ops-deployment.md §2/§5: push
 # new content, then re-run the deploy on the box). Updating the docs later —
 # without a full redeploy — means either re-running the orchestrator
-# (`sudo bash vms/www-vm/install.sh <APP_ENV>`) or `sudo systemctl start
+# (`sudo bash instances/www-vm/install.sh <APP_ENV>`) or `sudo systemctl start
 # docs-refresh.service` directly, the latter being strictly cheaper since it
 # skips the nginx steps entirely.
 #
@@ -500,7 +500,7 @@ reload_nginx() {
 # would then abort the run. Ordering it last means there is nothing left to
 # abort here; keeping it non-fatal additionally means this script still exits 0,
 # so an orchestrator's `set -e` does not stop the remaining children over a docs
-# build (see vms/www-vm/install.sh). The routing is already live by this point — a
+# build (see instances/www-vm/install.sh). The routing is already live by this point — a
 # failed build just means ${DOCS_ROOT} still holds the last good site, or, on a
 # first deploy, nothing yet and ${DOCS_URL_PREFIX}/ 404s.
 refresh_docs_now() {

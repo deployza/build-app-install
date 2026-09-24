@@ -1,11 +1,12 @@
-# otel/ — OpenTelemetry Collector configuration
+# vm/otel/ — OpenTelemetry Collector tooling
 
-**This folder is not like `vm/` or `docker/`.** Those hold per-app deploy
-scripts invoked by name from a baked launcher. This holds *operational* config,
-pushed to a running VM on demand. Nothing at boot ever touches it.
+**This folder holds no per-app deploy scripts and no config content.** It is the
+two scripts that render, ship and apply a collector config, and it lives inside
+`vm/` because Otel on a VM is a VM concern: there is no `docker/` counterpart at
+all. Nothing at boot ever touches it — a config arrives only when pushed.
 
 Full design and the reasoning behind every choice here:
-[`../../build-docs/ops-execution.md`](../../build-docs/ops-execution.md).
+[`../../../build-docs/ops-execution.md`](../../../build-docs/ops-execution.md).
 
 ## The one rule
 
@@ -23,14 +24,14 @@ A freshly created VM therefore has a collector that is running, healthy, and
 which is organised by layer:
 
 ```
-otel/
+vm/otel/
 ├── push.sh              PUSHER-side: render + ship + apply. Runs on your laptop.
 └── apply.sh             TARGET-side: swap, restart, health check, roll back.
 
-../vm/systems/<server>.yaml    WHAT to collect — one per server
+../systems/<server>.yaml    WHAT to collect — one per server
     tomcat.yaml  nginx.yaml  nginx-python.yaml  mysql.yaml  mcp.yaml
 
-../vm/vms/<vm>/exporter.yaml   WHERE to send it — ONE PER VM
+../instances/<vm>/exporter.yaml   WHERE to send it — ONE PER VM
     ziniapps-vm/exporter.yaml   elasticsearch/ziniapps-vm -> logs-ziniapps-vm
     www-vm/exporter.yaml        elasticsearch/www-vm      -> logs-www-vm
 ```
@@ -47,10 +48,10 @@ off switch that renders the inert config; any other value is an error pointing
 at `--vm`, and passing both flags is an error rather than a silent precedence
 rule.
 
-> **A target with no `vm/vms/<name>/` folder can only be pushed inert.** The
+> **A target with no `vm/instances/<name>/` folder can only be pushed inert.** The
 > `mcp` VM in `dz-builds` is the one such host today: `vm/systems/mcp.yaml` says
 > what to collect, but nothing says where to send it. Give it
-> `vm/vms/mcp/exporter.yaml` when it needs to ship logs. Note also that deleting
+> `vm/instances/mcp/exporter.yaml` when it needs to ship logs. Note also that deleting
 > `exporters/` removed the only **clickhouse** block — every VM exporter is
 > elasticsearch, so clickhouse is no longer reachable from this tree.
 
@@ -173,4 +174,5 @@ Four rules when editing:
 ## No `docker/` counterpart
 
 Containers log to stdout and the runtime collects it. The asymmetry is correct
-and should not be "fixed".
+and should not be "fixed" — and it is why this folder sits under `vm/` rather
+than beside it.

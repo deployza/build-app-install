@@ -1,7 +1,7 @@
 # system: nginx
 #
 # A COMPLETE collector config, except for two tokens (@EXPORTER@ and
-# @EXPORTER_NAME@) that push.sh fills from vm/vms/<vm>/exporter.yaml — the
+# @EXPORTER_NAME@) that push.sh fills from vm/instances/<vm>/exporter.yaml — the
 # target host's exporter, which is the only source of one.
 # Nothing merges this with anything: apply.sh swaps it in whole.
 #

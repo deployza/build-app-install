@@ -1,7 +1,7 @@
 # name: elasticsearch/www-vm
 #
 # www-vm's Otel exporter — ONE PER VM, because a VM runs one collector with one
-# config.yaml. This is the whole reason exporters live under vms/ and not beside
+# config.yaml. This is the whole reason exporters live under instances/ and not beside
 # an app or a product: there is exactly one destination per host, and every app
 # on www-vm ships through it.
 #
@@ -15,7 +15,7 @@
 # Selected with `otel/push.sh --vm www-vm`, which resolves this path.
 #
 # THIS HOST DOES NOT EXIST YET. www-website and www-apidocs are written and
-# vms/www-vm/install.sh is ready, but nothing is baked or running. The file is
+# instances/www-vm/install.sh is ready, but nothing is baked or running. The file is
 # here so the exporter exists the day the host does; delete the folder if that
 # host is not coming.
 #

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # -----------------------------------------------------------------------------
 # assess-server.sh — app deploy script for the assess backend WAR. Invoked by
-# vms/ziniapps-vm/install.sh, the orchestrator that installs all three assess apps
+# instances/ziniapps-vm/install.sh, the orchestrator that installs all three assess apps
 # (server, ui, exam) onto the same Tomcat. It downloads the app's install FOLDER and
 # the WAR from GCS, provisions the MySQL DB/user, installs the per-webapp Tomcat
 # context (context.xml + properties + logback) into
@@ -19,7 +19,7 @@ set -euo pipefail
 # See build-vm-images/scripts/ubuntu/install-nginx.sh and, on the VM itself,
 # /etc/nginx/app.d/README.
 #
-# Contract: invoked as `assess-server.sh APP_ENV` (by vms/ziniapps-vm/install.sh).
+# Contract: invoked as `assess-server.sh APP_ENV` (by instances/ziniapps-vm/install.sh).
 # APP_NAME is fixed to "assess-server" here (the backend's GCS artifacts live
 # under gs://dz-builds/<env>/assess-server/); the single argument is
 # APP_ENV ("$1").

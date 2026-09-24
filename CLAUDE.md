@@ -40,10 +40,10 @@ build-app-install/
 │   ├── apps/<app>/<app>.sh        # install ONE app (+ its otel yaml, if any)
 │   ├── systems/<server>.yaml      # what to collect on a server: tomcat, nginx,
 │   │                              #   nginx-python, mysql, mcp
-│   └── vms/<vm>/
-│       ├── install.sh             # install everything ONE HOST runs
-│       └── exporter.yaml          # where that host's logs go — ONE per VM
-├── otel/                  # NOT an app — operational config, PUSHED on demand
+│   ├── instances/<vm>/
+│   │   ├── install.sh             # install everything ONE HOST runs
+│   │   └── exporter.yaml          # where that host's logs go — ONE per VM
+│   └── otel/              # TOOLING, not an app: push.sh + apply.sh
 └── docker/
     ├── common.sh          # constants SOURCED by every docker/ script
     └── <APP_NAME>.sh      # deploy into the PID-1 Tomcat of a container
@@ -52,7 +52,7 @@ build-app-install/
 Either way the scripts land at `/tmp/deployza/repo`. A container runs
 `docker/<APP_NAME>.sh <APP_ENV>`; a VM runs either one app,
 `vm/apps/<APP_NAME>/<APP_NAME>.sh <APP_ENV>`, or everything a host needs,
-`vm/vms/<VM>/install.sh <APP_ENV>`. `APP_ENV` (`development` / `production`) is
+`vm/instances/<VM>/install.sh <APP_ENV>`. `APP_ENV` (`development` / `production`) is
 the sole argument in every case.
 
 **`vm/` is grouped by layer, `docker/` is flat.** The three VM folders answer
@@ -62,10 +62,10 @@ three different questions, and keeping them apart is the point:
 |---|---|---|
 | `vm/apps/` | what does this **app** need to install? | app name |
 | `vm/systems/` | what logs does this **server** produce? | tomcat, nginx, mysql, … |
-| `vm/vms/` | what runs on this **host**, and where do its logs go? | VM name |
+| `vm/instances/` | what runs on this **host**, and where do its logs go? | VM name |
 
 A product (`assess`, `ziniapps`) is not a folder anywhere: it is a set of apps
-that a host happens to run, and `vm/vms/<vm>/install.sh` is the only place that
+that a host happens to run, and `vm/instances/<vm>/install.sh` is the only place that
 set is written down. `ziniapps-vm` runs the three assess apps and both ziniapps
 sites, which is exactly why exporters are per-VM — one collector per host means
 one destination per host.
@@ -76,24 +76,28 @@ provisions the MySQL DB/user, installs the per-webapp Tomcat context
 (`<ctx>.xml` + properties + logback) into `$CATALINA_HOME/conf/Catalina/localhost`,
 and deploys the WAR under the stable name `<ctx>.war` (serving at `/<ctx>`).
 
-## `otel/` is not an app — read this before treating it like one
+## `vm/otel/` is tooling, not an app — read this before treating it like one
 
-[`otel/`](otel/) breaks the "one script per app per platform" shape above, on
-purpose. It holds OpenTelemetry Collector configuration, and it differs from
-`vm/` and `docker/` in three ways that matter:
+[`vm/otel/`](vm/otel/) breaks the "one script per app" shape of its siblings, on
+purpose. It holds no content at all — just the two scripts that render, ship and
+apply an OpenTelemetry Collector config — and it differs from the other `vm/`
+folders in three ways that matter:
 
 - **It is pushed, not pulled** — and it was the first thing here to be. Nothing
-  on the VM runs it: `otel/push.sh` runs on your laptop, renders a config for the
-  target's image flavor, ships it over the IAP tunnel and runs `otel/apply.sh`
-  there. Nothing at boot touches it.
+  on the VM runs it: `vm/otel/push.sh` runs on your laptop, splices
+  `vm/systems/<flavor>.yaml` with `vm/instances/<vm>/exporter.yaml`, ships the result
+  over the IAP tunnel and runs `vm/otel/apply.sh` there. Nothing at boot touches
+  it.
 - **It is not selected by `APP_NAME`.** The pusher names the target instance
   directly; the flavor comes from the VM's own `/etc/image-manifest.txt`.
 - **There is no `docker/` counterpart, deliberately.** Containers log to stdout
-  and the runtime collects it. Do not add one for symmetry.
+  and the runtime collects it. That asymmetry is also why this folder lives
+  *inside* `vm/` rather than beside it: Otel here is a VM concern end to end. Do
+  not add a container equivalent for symmetry.
 
 The image bakes only the collector binary, its unit and an inert `nop` config,
 so a VM with nothing pushed to it collects nothing and sends nowhere. See
-[`otel/README.md`](otel/README.md) and
+[`vm/otel/README.md`](vm/otel/README.md) and
 [`../build-docs/ops-execution.md`](../build-docs/ops-execution.md).
 
 > ## ⚠ `vm-startup.sh` IS GONE — and nothing replaces it yet
@@ -112,12 +116,12 @@ so a VM with nothing pushed to it collects nothing and sends nowhere. See
 >
 > **Deploying by hand, meanwhile:** copy the whole `vm/` folder (the app script
 > **and** `common.sh` — every script `source`s it) to the instance over the IAP
-> tunnel and run `sudo bash vm/vms/<VM>/install.sh <APP_ENV>` (or a single
+> tunnel and run `sudo bash vm/instances/<VM>/install.sh <APP_ENV>` (or a single
 > app's `vm/apps/<APP_NAME>/<APP_NAME>.sh`). Shipping one script, or one layer
 > folder, breaks at the `source` line.
 >
 > **Writing the pusher** is the next job: tar `vm/`, ship it to
-> `/tmp/deployza/repo`, run `vm/vms/<vm>/install.sh <APP_ENV>`. The scripts
+> `/tmp/deployza/repo`, run `vm/instances/<vm>/install.sh <APP_ENV>`. The scripts
 > themselves need no changes — they already take `APP_ENV` as `$1`; the pusher
 > just has to know which VM it is pushing to.
 
@@ -254,7 +258,7 @@ the folder, not the file.
 ## When adding a new app
 
 1. Add `vm/apps/<app>/<app>.sh` **and** `docker/<app>.sh`, then add the app to
-   the `CHILD_SCRIPTS` list of every `vm/vms/<vm>/install.sh` that should run it. Pick the template by model (see
+   the `CHILD_SCRIPTS` list of every `vm/instances/<vm>/install.sh` that should run it. Pick the template by model (see
    "Two kinds of app" above): `assess-server` for a per-PATH app backed by
    Tomcat, `assess-ui` for a per-PATH static bundle, `ziniapps-www` for a
    per-HOST static site. Keep the vm/docker differences above.
@@ -265,7 +269,7 @@ the folder, not the file.
 3. Ensure the app's `conf/` (incl. `install.properties`) + WAR are published to
    `gs://dz-builds/<env>/<app>/`.
 4. Deploy it: on a VM, push the whole `vm/` tree to the host and run
-   `vm/apps/<app>/<app>.sh <env>` (or that host's `vm/vms/<vm>/install.sh`); for a container, start it with env
+   `vm/apps/<app>/<app>.sh <env>` (or that host's `vm/instances/<vm>/install.sh`); for a container, start it with env
    `APP_NAME=<app>` `APP_ENV=<env>`.
 
 ## Gotchas

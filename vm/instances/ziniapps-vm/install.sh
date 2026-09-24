@@ -3,11 +3,11 @@ set -euo pipefail
 
 # TEMPORARY: this installer is disabled — do nothing and return successfully.
 # Remove this block to restore the original behaviour (everything below is intact).
-# echo "vms/ziniapps-vm/install.sh: temporarily disabled, skipping install."
+# echo "instances/ziniapps-vm/install.sh: temporarily disabled, skipping install."
 # exit 0
 
 # -----------------------------------------------------------------------------
-# vms/ziniapps-vm/install.sh — ORCHESTRATOR for the ziniapps-vm host. This is
+# instances/ziniapps-vm/install.sh — ORCHESTRATOR for the ziniapps-vm host. This is
 # the script the pusher ships and runs (APP_NAME="assess-install"). It does NOT
 # deploy anything itself; it installs every app that belongs on this VM by
 # invoking, in order:
@@ -39,9 +39,9 @@ set -euo pipefail
 # means every reload along the way tests a complete config, and a first boot
 # never has a window where go.ziniapps.com/assess-ui/ 404s.
 #
-# Contract: invoked as `vms/ziniapps-vm/install.sh APP_ENV`.
+# Contract: invoked as `instances/ziniapps-vm/install.sh APP_ENV`.
 # APP_NAME is fixed to "assess-install" here (the pusher resolves this file by
-# that name — <clone>/vm/vms/ziniapps-vm/install.sh); the single argument is
+# that name — <clone>/vm/instances/ziniapps-vm/install.sh); the single argument is
 # APP_ENV, which is passed through verbatim to every child.
 #
 # Ordering: the backend goes first so its DB/context are in place before the UI
@@ -53,7 +53,7 @@ set -euo pipefail
 # output (and the children's) goes wherever the pusher ran it — there is no
 # systemd unit and no journal of its own.
 # Run manually over SSH:
-#   sudo bash vms/ziniapps-vm/install.sh <APP_ENV> 2>&1 | tee /tmp/assess.log
+#   sudo bash instances/ziniapps-vm/install.sh <APP_ENV> 2>&1 | tee /tmp/assess.log
 # -----------------------------------------------------------------------------
 
 # Directory this script lives in, so the children are found regardless of CWD
@@ -61,7 +61,7 @@ set -euo pipefail
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The child deploy scripts, run in this order, as paths RELATIVE TO SCRIPT_DIR
-# (vm/vms/ziniapps-vm/). Every app lives under vm/apps/<app>/, one folder per
+# (vm/instances/ziniapps-vm/). Every app lives under vm/apps/<app>/, one folder per
 # app, so each child is reached as ../../apps/<app>/<app>.sh. The first three
 # are per-PATH apps (Tomcat contexts + app.d location blocks); the last two are
 # per-HOST static sites (site.d server blocks). See the header for why the sites

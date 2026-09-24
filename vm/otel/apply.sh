@@ -11,7 +11,7 @@
 # WHAT IT DELIBERATELY DOES NOT DO:
 #
 #   * No git clone, no download, no polling. The config arrives with the push.
-#     See ../../build-docs/ops-execution.md — nothing on a VM pulls.
+#     See ../../../build-docs/ops-execution.md — nothing on a VM pulls.
 #   * No probing of what is installed. The pusher already knows which flavor it
 #     targeted; detection here would be a second, drifting source of truth.
 #   * No `otelcol validate`. That is a schema check on a config the pusher
