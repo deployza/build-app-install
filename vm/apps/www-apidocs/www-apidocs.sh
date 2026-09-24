@@ -10,7 +10,7 @@ set -euo pipefail
 # at a path under it. They share nothing but a hostname — different content,
 # different source (a GCS artifact vs. a git checkout built on this VM),
 # different update trigger (a WAR release vs. a docs commit) — so they are now
-# two scripts, run together by www-install.sh.
+# two scripts, run together by vms/www-vm/install.sh.
 #
 # THIS IS A per-PATH APP (see this repo's CLAUDE.md — "Two kinds of app"): it
 # writes BARE LOCATION BLOCKS to /etc/nginx/app.d/, never a server{} block. The
@@ -20,7 +20,7 @@ set -euo pipefail
 # neither overwrites the other.
 #
 # Ordering is NOT load-bearing: nginx resolves the app.d include at reload time,
-# not at write time, so either script may run first. www-install.sh runs the
+# not at write time, so either script may run first. vms/www-vm/install.sh runs the
 # site first anyway, so that every reload along the way tests a complete config.
 #
 # WHAT THIS SCRIPT DEPLOYS — AND WHERE IT COMES FROM
@@ -69,11 +69,11 @@ set -euo pipefail
 #
 # Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
 # unit. Where its output lands depends on how it is invoked:
-#   * Pushed (the normal path, via www-install.sh): its output goes to wherever
+#   * Pushed (the normal path, via vms/www-vm/install.sh): its output goes to wherever
 #     the pusher ran it — no systemd unit, no journal of its own.
-#     www-install.sh also tees a per-child copy to /tmp/deployza/logs/.
+#     vms/www-vm/install.sh also tees a per-child copy to /tmp/deployza/logs/.
 #   * Run manually over SSH: output goes to your terminal; capture with
-#       sudo bash www-apidocs.sh <APP_ENV> 2>&1 | tee /tmp/www-apidocs.log
+#       sudo bash apps/www-apidocs/www-apidocs.sh <APP_ENV> 2>&1 | tee /tmp/www-apidocs.log
 #
 # This script only INSTALLS — the docs are then served by the separate 'nginx'
 # service and rebuilt by the separate 'docs-refresh' service, whose logs are
@@ -93,13 +93,14 @@ set -euo pipefail
 # the sole argument.
 readonly APP_NAME="www-apidocs"
 
-# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, beside
-# this script. This script uses only the NGINX_* ones (it downloads nothing),
-# but sources the file whole like every sibling rather than re-declaring
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, at the
+# vm/ root, two levels up from this script (one copy for the whole tree).
+# This script uses only the NGINX_* ones (it downloads nothing), but sources
+# the file whole like every sibling rather than re-declaring
 # constants. Everything below is this app's own and deliberately stays here.
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./common.sh
-source "${SCRIPT_DIR}/common.sh"
+# shellcheck source=../../common.sh
+source "${SCRIPT_DIR}/../../common.sh"
 
 # The URL prefix the docs answer on, and the doc root behind it. Kept as one
 # pair because changing either alone breaks the mapping.
@@ -249,7 +250,7 @@ prepare_docs_root() {
 # re-run to update" model every app here follows (ops-deployment.md §2/§5: push
 # new content, then re-run the deploy on the box). Updating the docs later —
 # without a full redeploy — means either re-running the orchestrator
-# (`sudo bash www-install.sh <APP_ENV>`) or `sudo systemctl start
+# (`sudo bash vms/www-vm/install.sh <APP_ENV>`) or `sudo systemctl start
 # docs-refresh.service` directly, the latter being strictly cheaper since it
 # skips the nginx steps entirely.
 #
@@ -269,7 +270,7 @@ install_docs_refresh_service() {
   cat >"$DOCS_REFRESH_SCRIPT" <<EOF
 #!/bin/bash
 # docs-refresh — build www-apidocs' MkDocs site and swap it into ${DOCS_ROOT}.
-# Installed by build-app-install/vm/${APP_NAME}.sh (install_docs_refresh_service).
+# Installed by build-app-install/vm/apps/${APP_NAME}/${APP_NAME}.sh (install_docs_refresh_service).
 # Do not edit by hand: the next deploy overwrites this file.
 #
 # ExecStart of ${DOCS_REFRESH_SERVICE} — on demand only, no timer: run once per
@@ -311,7 +312,7 @@ trap cleanup EXIT
 # GITHUB_PAT_PROJECT is passed explicitly (unlike mcp's gcp-secret, which reads
 # the CALLING VM's own project off the metadata server) because this secret
 # lives in a different project than this VM's own — see this script's installer
-# (build-app-install/vm/${APP_NAME}.sh) for the grant this depends on.
+# (build-app-install/vm/apps/${APP_NAME}/${APP_NAME}.sh) for the grant this depends on.
 fetch_github_pat() {
   GITHUB_PAT="\$(gcloud secrets versions access latest \\
     --secret="\$GITHUB_PAT_SECRET" --project="\$GITHUB_PAT_PROJECT")"
@@ -377,7 +378,7 @@ EOF
   chown root:root "$DOCS_REFRESH_SCRIPT"
 
   cat >"$DOCS_REFRESH_SERVICE_PATH" <<EOF
-# Installed by build-app-install/vm/${APP_NAME}.sh. Do not edit by hand: the
+# Installed by build-app-install/vm/apps/${APP_NAME}/${APP_NAME}.sh. Do not edit by hand: the
 # next deploy overwrites this file.
 #
 # NOT enabled and NO [Install] section — deliberately on-demand only. Run by
@@ -424,7 +425,7 @@ write_nginx_conf() {
   echo "Writing nginx location blocks ${NGINX_CONF}..."
 
   cat >"$NGINX_CONF" <<EOF
-# ${APP_NAME} — generated by build-app-install/vm/${APP_NAME}.sh. Do not edit by
+# ${APP_NAME} — generated by build-app-install/vm/apps/${APP_NAME}/${APP_NAME}.sh. Do not edit by
 # hand: the next deploy overwrites this file. BARE location blocks (this is
 # included INSIDE a server block, so it must not contain one).
 
@@ -499,7 +500,7 @@ reload_nginx() {
 # would then abort the run. Ordering it last means there is nothing left to
 # abort here; keeping it non-fatal additionally means this script still exits 0,
 # so an orchestrator's `set -e` does not stop the remaining children over a docs
-# build (see www-install.sh). The routing is already live by this point — a
+# build (see vms/www-vm/install.sh). The routing is already live by this point — a
 # failed build just means ${DOCS_ROOT} still holds the last good site, or, on a
 # first deploy, nothing yet and ${DOCS_URL_PREFIX}/ 404s.
 refresh_docs_now() {

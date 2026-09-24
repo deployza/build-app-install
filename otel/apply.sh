@@ -14,10 +14,12 @@
 #     See ../../build-docs/ops-execution.md — nothing on a VM pulls.
 #   * No probing of what is installed. The pusher already knows which flavor it
 #     targeted; detection here would be a second, drifting source of truth.
-#   * No `otelcol validate`. That is a schema check, and CI already ran it on
-#     every flavor x exporter combination (see cloudbuild.yaml). It cannot see
-#     a missing log dir, a bad credential or a busy port. The post-restart
-#     health check below catches all three.
+#   * No `otelcol validate`. That is a schema check on a config the pusher
+#     already rendered and (where the binary was available) already validated;
+#     re-running it here would only re-answer a question asked upstream. It
+#     cannot see a missing log dir, a bad credential or a busy port anyway —
+#     the post-restart health check below catches all three, and those are the
+#     failures that actually happen on a target.
 set -euo pipefail
 
 log() { echo "[otel-apply] $*"; }

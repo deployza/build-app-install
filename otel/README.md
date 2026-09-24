@@ -19,14 +19,58 @@ A freshly created VM therefore has a collector that is running, healthy, and
 
 ## Layout
 
+**This folder holds only the tooling.** The content lives in the `vm/` tree,
+which is organised by layer:
+
 ```
 otel/
 ├── push.sh              PUSHER-side: render + ship + apply. Runs on your laptop.
-├── apply.sh             TARGET-side: swap, restart, health check, roll back.
-├── configs/<flavor>.yaml   one complete config per image flavor
-├── exporters/<backend>.yaml  the exporter block + its pipeline key
-└── cloudbuild.yaml      CI: validates every flavor x exporter combination
+└── apply.sh             TARGET-side: swap, restart, health check, roll back.
+
+../vm/systems/<server>.yaml    WHAT to collect — one per server
+    tomcat.yaml  nginx.yaml  nginx-python.yaml  mysql.yaml  mcp.yaml
+
+../vm/vms/<vm>/exporter.yaml   WHERE to send it — ONE PER VM
+    ziniapps-vm/exporter.yaml   elasticsearch/ziniapps-vm -> logs-ziniapps-vm
+    www-vm/exporter.yaml        elasticsearch/www-vm      -> logs-www-vm
 ```
+
+**One exporter per VM is a constraint, not a convention.** A VM runs one
+collector with one `config.yaml`, so it has exactly one destination. `ziniapps-vm`
+runs the three assess apps and both ziniapps sites; all five ship through its
+single exporter, and telling their lines apart is a query concern — every record
+carries `service.name`, `deployment.environment`, `image.flavor` and `log.type`.
+
+`push.sh --vm <name>` selects one of those, and a push must pass either that or
+`--exporter none` — there is no default. `--exporter` takes **only** `none`, the
+off switch that renders the inert config; any other value is an error pointing
+at `--vm`, and passing both flags is an error rather than a silent precedence
+rule.
+
+> **A target with no `vm/vms/<name>/` folder can only be pushed inert.** The
+> `mcp` VM in `dz-builds` is the one such host today: `vm/systems/mcp.yaml` says
+> what to collect, but nothing says where to send it. Give it
+> `vm/vms/mcp/exporter.yaml` when it needs to ship logs. Note also that deleting
+> `exporters/` removed the only **clickhouse** block — every VM exporter is
+> elasticsearch, so clickhouse is no longer reachable from this tree.
+
+Each VM's credentials are host-scoped (`OTEL_ZINIAPPS_VM_ES_ENDPOINT`,
+`OTEL_ZINIAPPS_VM_ES_API_KEY`, and so on), so pushing with the wrong env file
+fails at collector start rather than shipping to the wrong place.
+
+> **ONE COLLECTOR PER VM, therefore one exporter per VM.** `assess` and
+> `ziniapps` both deploy onto `ziniapps-vm`, so only one of their exporters can
+> be live there at a time, and whichever you push receives **both** products'
+> lines. Nothing separates them yet: no deploy script sets `access_log`, so
+> every site writes to the default `/var/log/nginx/*.log`. Give the sites their
+> own `access_log` paths before treating either index as single-product.
+
+**There is no CI for this folder.** A `cloudbuild.yaml` here rendered and
+validated every flavor x exporter combination, but `build-app-install` is not a
+connected Cloud Build repository — nothing ever triggered it — so it was deleted
+rather than left reading like a safety net that was not there. The only check
+before a config reaches a VM is `push.sh --dry-run` and the `otelcol-contrib
+validate` it runs when that binary is on your machine. Keep it installed.
 
 ## Usage
 
@@ -46,7 +90,9 @@ otel/
 
 `push.sh` reads the target's flavor from `/etc/image-manifest.txt` rather than
 trusting an inventory, so it cannot ship a Tomcat config to a box with no
-Tomcat.
+Tomcat. It looks the flavor up in `vm/systems/`, and with the combined flavors
+gone it finds no file at all for a combined-flavor box; that lookup is what the
+composition step has to change.
 
 ## The env file
 
@@ -59,8 +105,8 @@ from Secret Manager at push time:
 cat > /tmp/otel-env <<EOF
 OTEL_DEPLOY_ENV=production
 OTEL_SERVICE_NAME=ziniapps
-OTEL_ES_ENDPOINT=$(gcloud secrets versions access latest --secret=otel-es-endpoint)
-OTEL_ES_API_KEY=$(gcloud secrets versions access latest --secret=otel-es-api-key)
+OTEL_ZINIAPPS_VM_ES_ENDPOINT=$(gcloud secrets versions access latest --secret=otel-ziniapps-vm-es-endpoint)
+OTEL_ZINIAPPS_VM_ES_API_KEY=$(gcloud secrets versions access latest --secret=otel-ziniapps-vm-es-api-key)
 EOF
 ```
 
@@ -69,13 +115,28 @@ pasted into a ticket, without leaking a key.
 
 ## Editing a config
 
-Configs are **complete files**, one per flavor, with two placeholder tokens
-(`@EXPORTER@`, `@EXPORTER_NAME@`) that `push.sh` fills. There is no merging, no
-renderer and no fragment library — that was tried and dropped; see the design
-doc. The nine files duplicate a lot, deliberately: duplication you can read
-beats indirection you have to trace.
+System configs (`vm/systems/*.yaml`) are **complete files**, one per server,
+with two placeholder tokens
+(`@EXPORTER@`, `@EXPORTER_NAME@`) that `push.sh` fills. `@EXPORTER@` is spliced
+only on a line that is **nothing but the token** — the header names both tokens
+in prose, and an unanchored match used to splice the whole exporter block into
+that comment and render invalid YAML. Keep the placeholder on its own line. The five files duplicate
+a lot, deliberately: duplication you can read beats indirection you have to
+trace.
 
-Three rules when editing:
+> **The combined-flavor configs were deleted on 2026-09-24**
+> (`tomcat-mysql`, `tomcat-nginx-mysql`), along with `git` and `java`. The
+> intent is to compose the per-server configs instead. **The composition step
+> does not exist yet** — `push.sh` still resolves exactly one
+> `configs/<flavor>.yaml` from the target's `/etc/image-manifest.txt`
+> ([push.sh:67](push.sh)), so a push to a `tomcat-nginx-mysql` box (which is
+> what `ziniapps-vm` is) now fails with *no config for flavor*. See the design
+> doc before building the composer: **the Collector's native multi-`--config`
+> merge will not do this** — maps merge but lists are replaced, so
+> `service.pipelines.logs.receivers` takes the last fragment only and a
+> component's logs vanish silently.
+
+Four rules when editing:
 
 1. **Keep them thin.** Tail, stamp resource attributes, ship. No grok, no JSON
    parsing, no severity mapping. If you are reaching for a parser, that is the
@@ -83,7 +144,10 @@ Three rules when editing:
 2. **Always declare `health_check` on `127.0.0.1:13133`.** `apply.sh` polls it
    to decide whether a push worked. A config without it gets rolled back even
    when it is perfectly good. CI checks this.
-3. **Always stamp the resource attributes.** Without `service.name`,
+3. **Validate before you push.** `./push.sh ... --dry-run` renders the config
+   and, if `otelcol-contrib` is on your machine, validates it. Nothing else
+   will: `apply.sh` does not re-validate on the target, and there is no CI.
+4. **Always stamp the resource attributes.** Without `service.name`,
    `deployment.environment`, `image.flavor` and `log.type`, the destination is
    an undifferentiated mush and fixing it later means reindexing.
 
@@ -101,9 +165,10 @@ Three rules when editing:
   `otelcol.service` declares no `ExecReload` on purpose.
 - **Queues are in memory.** Logs buffered on a VM are lost if it restarts while
   the destination is down. Durable buffering is a gateway's job.
-- **`OTELCOL_VERSION` in `cloudbuild.yaml` must match `versions.env` in
-  `build-vm-images`.** Different repos, so the pairing is manual. Validating
-  against a version the fleet does not run is worse than not validating.
+- **Validate against the version the fleet runs.** The collector version is
+  pinned in `versions.env` in `build-vm-images`; the `otelcol-contrib` on your
+  machine should match it. Validating against a different version is worse than
+  not validating — it reports green on a config the VMs will reject.
 
 ## No `docker/` counterpart
 

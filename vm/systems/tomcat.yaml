@@ -1,8 +1,9 @@
-# flavor: tomcat
+# system: tomcat
 #
 # A COMPLETE collector config, except for two tokens (@EXPORTER@ and
-# @EXPORTER_NAME@) that push.sh fills from exporters/<backend>.yaml. Nothing
-# merges this with anything: apply.sh swaps it in whole.
+# @EXPORTER_NAME@) that push.sh fills from vm/vms/<vm>/exporter.yaml — the
+# target host's exporter, which is the only source of one.
+# Nothing merges this with anything: apply.sh swaps it in whole.
 #
 # THIN BY DESIGN. It tails, stamps resource attributes, and ships. There is no
 # grok, no JSON parsing, no severity mapping and no per-application handling —

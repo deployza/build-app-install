@@ -2,37 +2,45 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# ziniapps-www.sh — app deploy script (the <APP_NAME>.sh that is PUSHED
-# to the VM and run there). ziniapps-www is the public marketing site
-# for www.ziniapps.com: a STATIC site (no database, no app.properties, no
-# logback, no Tomcat), packaged as a WAR only because that is what its Maven
-# build produces.
+# ziniapps-go.sh — app deploy script (the <APP_NAME>.sh that is PUSHED to
+# the VM and run there). ziniapps-go is the landing page for
+# go.ziniapps.com: a STATIC site (no database, no app.properties, no logback, no
+# Tomcat), packaged as a WAR only because that is what its Maven build produces.
 #
-# A WAR is just a zip, and this one holds nothing but static files, so this
-# script UNZIPS it into an nginx document root and lets nginx serve it directly.
+# A WAR is just a zip, and this one holds nothing but static files, so — exactly
+# as assess-ui.sh does — this script UNZIPS it into an nginx document root and
+# lets nginx serve it directly.
 #
-# THIS IS A NEAR-COPY OF ziniapps-go.sh, WITH ONE DELIBERATE DIFFERENCE
+# WHAT MAKES THIS SCRIPT DIFFERENT FROM assess-ui.sh
 #
-# Both serve a domain root via a per-HOST server block in /etc/nginx/site.d/
-# (see that script's header for why a root cannot be an app.d path drop-in, and
-# why site.d exists at all). They differ in exactly one respect:
+# assess-ui/assess-exam/assess-server each serve a PATH PREFIX (/<ctx>/) inside
+# the ONE `_` default server block the image bakes. This app serves the DOMAIN
+# ROOT of a specific hostname instead — go.ziniapps.com/ — and a root cannot be
+# expressed as a path-prefix drop-in: two apps would each need `location /` in
+# the same server block, which is a config conflict.
 #
-#   ziniapps-go.sh  INCLUDES /etc/nginx/app.d/*.conf in its server block, so
-#                   go.ziniapps.com/assess-ui/ etc. keep working — its landing
-#                   page links to the product with RELATIVE urls.
+# So this script writes a per-HOST server block (a `site.d` drop-in) rather than
+# a per-path location block (an `app.d` drop-in). See write_nginx_conf and
+# ensure_site_d_include below.
 #
-#   THIS SCRIPT DOES NOT. www.ziniapps.com is the marketing site; the product
-#   lives on go.ziniapps.com and is linked ABSOLUTELY (see the site's
-#   js/config.js). Including app.d here would publish /assess-ui/,
-#   /assess-exam/ and /assess-server/ on the marketing host as a second set of
-#   URLs for the same app — splitting sessions and cookies across two origins
-#   and giving search engines a duplicate to index. The omission is the point,
-#   not an oversight; see write_nginx_conf.
+# WHY THE ASSESS APPS KEEP WORKING
 #
-# They are kept as separate scripts rather than one parameterised script for the
-# same reason vm/ and docker/ are separate: a script is resolved BY APP_NAME,
-# so each app needs its own file regardless, and a shared one behind a
-# flag would hide precisely the difference above.
+# Adding a server block whose server_name matches go.ziniapps.com means nginx
+# routes that Host to THIS block, not to the baked `_` default. The assess
+# location blocks live in app.d and are included by the `_` block, so they would
+# stop resolving on this host — go.ziniapps.com/assess-ui/ would 404.
+#
+# That is exactly the layout ziniapps-go depends on: its index.html links to
+# "assess-ui/session-login.html" as a RELATIVE url, which only resolves if the
+# assess apps are served from the same host as this landing page.
+#
+# The fix is one line: this server block ALSO does
+#   include /etc/nginx/app.d/*.conf;
+# so it inherits every existing per-path drop-in verbatim. Nothing about
+# assess-ui.sh / assess-exam.sh / assess-server.sh changes, and the assess apps
+# remain reachable at go.ziniapps.com/assess-ui/ etc. The `location /` in this
+# file only catches what those prefixes do not — nginx always prefers the longest
+# matching prefix, so /assess-ui/ still wins over /.
 #
 # What this script does:
 #   1. downloads the app's install FOLDER and the WAR from GCS
@@ -42,11 +50,12 @@ set -euo pipefail
 #   5. reloads nginx
 #
 # Contract: invoked as `<APP_NAME>.sh APP_ENV`.
-# APP_NAME is fixed to "ziniapps-www" here (this IS that script); the single
+# APP_NAME is fixed to "ziniapps-go" here (this IS that script); the single
 # argument is APP_ENV ("$1").
 #
 # Requires the tomcat-nginx-mysql image (or any image whose install-nginx.sh has
-# run).
+# run): this script needs /etc/nginx/app.d/ to exist (it includes it from the
+# server block it writes) and creates /etc/nginx/site.d/ alongside it.
 #
 # GCS layout (${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/):
 #   install/                       the whole config folder, copied verbatim:
@@ -57,26 +66,32 @@ set -euo pipefail
 # derived by this script. Keys used:
 #   install.war                  WAR filename to download and unzip
 #   install.server.name          the hostname this block answers for, e.g.
-#                                www.ziniapps.com
+#                                go.ziniapps.com. This is what makes the app a
+#                                SITE rather than a path — it has no analogue in
+#                                the assess-* scripts.
 #   install.site.name            OPTIONAL. bare name used for the doc-root dir
 #                                and the conf filename; defaults to the app name
-#                                (ziniapps-www).
+#                                (ziniapps-go). Only set it if two deploys of
+#                                this app must coexist on one VM.
 #   install.web.root             OPTIONAL. nginx static root holding the per-site
-#                                dirs; defaults to /var/www/site.
+#                                dirs; defaults to /var/www/site. NOTE this is a
+#                                DIFFERENT default from the assess-* scripts
+#                                (/var/www/app) — see DEFAULT_WEB_ROOT below.
 #
 # Caching — every response from this app is served with
 #   Cache-Control: no-cache, must-revalidate
 #   Pragma: no-cache
 #   Expires: 0
 # so a browser always revalidates before reusing anything, and a redeploy is
-# picked up on the next request rather than after a cache expiry.
+# picked up on the next request rather than after a cache expiry. This matches
+# the assess-* scripts and is applied to EVERY file, not just index.html.
 #
 # Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
 # unit. Where its output lands depends on how it is invoked:
 #   * Pushed (the normal path): its output goes to wherever the pusher ran it —
 #     there is no systemd unit and no journal of its own. Capture it there.
 #   * Run manually over SSH: output goes to your terminal; capture with
-#       sudo bash ziniapps-www.sh <APP_ENV> 2>&1 | tee /tmp/ziniapps-www.log
+#       sudo bash apps/ziniapps-go/ziniapps-go.sh <APP_ENV> 2>&1 | tee /tmp/ziniapps-go.log
 #
 # This script only INSTALLS the files — they are then served by the separate
 # 'nginx' service, whose logs are elsewhere:
@@ -87,40 +102,42 @@ set -euo pipefail
 # =============================================================================
 # Variable declarations
 # =============================================================================
+# All variables are declared here up front. Static values are set inline;
+# values that depend on runtime input (the APP_ENV argument, or keys read from
+# install.properties) are declared empty here and populated in main() as they
+# become available. The comment on each explains where its value comes from.
 
 # --- Fixed identity -----------------------------------------------------------
-# This script IS the ziniapps-www installer, so APP_NAME is fixed rather than
+# This script IS the ziniapps-go installer, so APP_NAME is fixed rather than
 # taken from the caller. (The pusher resolves this very file by that name —
-# <clone>/vm/ziniapps-www.sh — so the name is already implied.) Only APP_ENV
+# <clone>/vm/apps/ziniapps-go/ziniapps-go.sh — so the name is already implied.) Only APP_ENV
 # varies (development/production) and is the sole argument.
-readonly APP_NAME="ziniapps-www"
+readonly APP_NAME="ziniapps-go"
 
 # --- Shared estate constants --------------------------------------------------
-# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, beside
-# this script, so that changing the artifact bucket (or any path the images
-# bake) is one edit for every VM app instead of one per app. docker/ keeps its
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, at the
+# vm/ root, two levels up from this script (one copy for the whole tree),
+# so that changing the artifact bucket (or any path the images bake) is one
+# edit for every VM app instead of one per app. docker/ keeps its
 # OWN common.sh — the two platform folders are self-contained, so a bucket
 # change is two edits, one per folder. common.sh documents what belongs there
 # and what deliberately stays here (anything per-app).
 #
-# NOTE: this script deliberately does NOT use NGINX_APP_D, unlike
-# ziniapps-go.sh — this site does not include the per-path apps (see the
-# header), so the product keeps exactly one origin. INCLUDE_MARKER is shared
-# BY VALUE with ziniapps-go.sh: whichever runs first patches nginx.conf and the
-# other finds the marker and skips, so the two must stay in sync.
+# NOTE on NGINX_APP_D: this script WRITES NOTHING there. It reads the constant
+# only so the server block it generates can `include` that dir, keeping the
+# assess-* per-path apps reachable on this host (see the header). Its existence
+# is the image check in require_tools.
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./common.sh
-source "${SCRIPT_DIR}/common.sh"
-
-# The per-HOST routing seam. Created by these scripts, not by the image. One file
-# per site: <site>.conf, each holding a complete server{} block, included from
-# the http{} block of nginx.conf.
-#
+# shellcheck source=../../common.sh
+source "${SCRIPT_DIR}/../../common.sh"
 
 # Fallback for install.web.root — the parent holding the per-SITE doc roots.
+#
 # Deliberately NOT /var/www/app (the assess-* default): that dir holds per-PATH
-# apps served by the image's `_` block, and the two models should not share a
-# namespace. Not baked by the image, so this script creates it.
+# apps served by the `_` block, and the two models should not share a namespace —
+# a site named the same as a context path would otherwise collide silently.
+# Unlike /var/www/app this dir is not baked by the image, so this script creates
+# it (see prepare_web_root).
 readonly DEFAULT_WEB_ROOT="/var/www/site"
 
 # --- Populated in main() from the APP_ENV argument ----------------------------
@@ -149,7 +166,8 @@ NGINX_CONF=""           # ${NGINX_SITE_D}/${SITE_NAME}.conf
 
 # read_prop <key>: prints the value of the last matching line in
 # install.properties, trimmed of surrounding whitespace AND surrounding
-# single/double quotes.
+# single/double quotes (values like install.web.root="..." may be quoted
+# in the file).
 read_prop() {
   local key="$1" val
   val="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$INSTALL_PROPS" \
@@ -185,6 +203,8 @@ default_prop() {
 }
 
 # parse_args: validate the caller's contract and set APP_ENV.
+# APP_ENV is required — refuse to run without it rather than deploying to a
+# wrong default environment.
 parse_args() {
   APP_ENV="${1:-}"
   if [[ -z "$APP_ENV" ]]; then
@@ -207,6 +227,17 @@ require_tools() {
     exit 1
   fi
 
+  # app.d is created by the image's install-nginx.sh. This script writes nothing
+  # into it, but the server block it generates INCLUDES it — and nginx treats a
+  # missing include path as a hard config error (unlike the *.conf wildcard,
+  # which may legally match zero files). A missing dir here also means this host
+  # was not built from an nginx-enabled image at all.
+  if [[ ! -d "$NGINX_APP_D" ]]; then
+    echo "ERROR: ${NGINX_APP_D} does not exist — this host was not built from an" >&2
+    echo "  nginx-enabled image (see build-vm-images/scripts/ubuntu/install-nginx.sh)." >&2
+    exit 1
+  fi
+
   if [[ ! -f "$NGINX_CONF_MAIN" ]]; then
     echo "ERROR: ${NGINX_CONF_MAIN} not found — cannot install the site.d include." >&2
     exit 1
@@ -214,7 +245,8 @@ require_tools() {
 }
 
 # prepare_staging: (re)create a clean staging dir so it holds only the current
-# deploy's artifacts.
+# deploy's artifacts. The install/ contents and the WAR share this one dir — the
+# WAR's filename (install.war) never collides with an install file.
 prepare_staging() {
   echo "Clearing previous ${APP_NAME} staging dir (${STAGE_DIR})..."
   rm -rf "${STAGE_DIR:?}"
@@ -222,6 +254,8 @@ prepare_staging() {
 }
 
 # download_install: recursive copy of the whole install/ folder into STAGE_DIR.
+# Trailing '/*' copies its contents straight into STAGE_DIR (rather than nesting
+# an install/ dir inside it). Verifies install.properties landed.
 download_install() {
   echo "Downloading install folder for ${APP_NAME} (${APP_ENV})..."
   echo "  install: ${INSTALL_URI}/"
@@ -234,13 +268,17 @@ download_install() {
 }
 
 # load_props: read every deploy value straight from install.properties and
-# derive the paths that depend on those values.
+# derive the paths that depend on those values. install.properties is the single
+# source of truth — nothing here is derived from anything but its keys.
 load_props() {
   require_prop APP_WAR_FILE 'install.war'
   require_prop SERVER_NAME  'install.server.name'
   default_prop SITE_NAME    'install.site.name' "$APP_NAME"
   default_prop WEB_ROOT     'install.web.root'  "$DEFAULT_WEB_ROOT"
 
+  # Guard every value that gets interpolated into a path we rm -rf or into the
+  # generated nginx config.
+  #
   # SERVER_NAME lands inside a server_name directive, so it must be a plain
   # hostname: anything containing whitespace, ';' or '{' could close the
   # directive and inject arbitrary config. Restricting it to DNS-legal characters
@@ -268,6 +306,8 @@ load_props() {
     exit 1
   fi
 
+  # WAR: staged under its real versioned name so the staging dir shows exactly
+  # what was deployed; unzipped into ${WEB_ROOT}/<site>.
   TMP_WAR="${STAGE_DIR}/${APP_WAR_FILE}"
   WAR_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/${APP_WAR_FILE}"
 
@@ -281,8 +321,11 @@ load_props() {
 }
 
 # prepare_web_root: create the per-site static root if it does not exist.
+#
 # Unlike /var/www/app (baked empty and www-data-owned by install-nginx.sh), the
-# site root is this script's own convention and no image creates it.
+# site root is this script's own convention and no image creates it. Creating it
+# here rather than requiring a manual mkdir keeps a first deploy onto a fresh VM
+# a one-step operation.
 prepare_web_root() {
   if [[ ! -d "$WEB_ROOT" ]]; then
     echo "Creating site root ${WEB_ROOT}..."
@@ -302,7 +345,8 @@ download_war() {
 }
 
 # unpack_war: unzip the WAR into a scratch dir NEXT TO the live doc root, then
-# swap it in with two renames.
+# swap it in with two renames. A WAR is just a zip; this one holds only static
+# files, so unzipping it IS the deploy.
 #
 # Why not unzip straight into ${DOC_ROOT}: nginx is serving out of that dir right
 # now. Unzipping in place would expose a half-written tree to live requests, and
@@ -312,7 +356,7 @@ download_war() {
 #
 # The swap is two renames rather than one because rename() cannot replace a
 # non-empty directory: move the live tree aside, move the new one in, then delete
-# the old.
+# the old. The gap between them is a couple of syscalls wide.
 #
 # WEB-INF/ and META-INF/ are dropped after unpacking: they are servlet-container
 # metadata with no meaning to nginx, and WEB-INF is exactly the kind of thing
@@ -320,6 +364,8 @@ download_war() {
 unpack_war() {
   echo "Unpacking WAR into ${DOC_ROOT} (via ${STAGED_DOC_ROOT})..."
 
+  # Leftovers from an interrupted previous run would otherwise merge into this
+  # deploy's tree.
   rm -rf "${STAGED_DOC_ROOT:?}" "${OLD_DOC_ROOT:?}"
   mkdir -p "$STAGED_DOC_ROOT"
 
@@ -357,7 +403,7 @@ unpack_war() {
 
 # ensure_site_d_include: create /etc/nginx/site.d/ and make nginx.conf include it
 # from the http{} block. One-time and idempotent — the marker comment makes a
-# re-run a no-op, INCLUDING when ziniapps-go.sh already ran on this host.
+# re-run a no-op.
 #
 # WHY THIS PATCHES nginx.conf AT ALL
 #
@@ -366,15 +412,28 @@ unpack_war() {
 # that server — neither is a place a new server block can go. There is therefore
 # no existing seam for a per-host site, and one has to be created.
 #
-# conf.d/ is avoided even though it would need no patching: it is the IMAGE's
-# namespace (install-nginx.sh writes tomcat.conf there and deletes files it does
-# not expect), and a deploy-time file in an image-owned dir invites a collision
-# that stays silent until a reload.
+# WHY NOT DROP THE SERVER BLOCK INTO conf.d/ INSTEAD
+#
+# It would work today with no patching at all: conf.d/*.conf is already included
+# at the http level. It is avoided because conf.d is the IMAGE's namespace —
+# install-nginx.sh writes tomcat.conf there and removes files it does not expect
+# (it deletes the stock default.conf). A deploy-time file in an image-owned dir
+# invites exactly the kind of collision that is silent until a reload. site.d is
+# unambiguously the deploy's.
+#
+# The insert targets the `include /etc/nginx/conf.d/*.conf;` line that the stock
+# nginx.org nginx.conf carries inside http{}. Appending after it keeps the new
+# include inside http{} without this script having to parse brace nesting, and
+# ORDER matters: conf.d holds the `_` default_server, and a default_server must
+# be defined before... actually no — nginx resolves default_server irrespective
+# of order. The reason to go after is simpler: it reads as "the image's config,
+# then ours".
 ensure_site_d_include() {
   mkdir -p "$NGINX_SITE_D"
 
   # Document the contract next to the dir it governs, so it is discoverable from
-  # a running VM and not only from this repo.
+  # a running VM and not only from this repo. Rewritten every deploy (cheap, and
+  # keeps it accurate if the contract changes).
   cat >"${NGINX_SITE_D}/README" <<'EOF'
 Per-SITE nginx server blocks (one file per hostname).
 
@@ -437,38 +496,38 @@ EOF
 
 # write_nginx_conf: generate this site's server block.
 #
-# A COMPLETE server{} block, because it is included at the http{} level (see
-# ensure_site_d_include). GENERATED rather than copied from GCS: its content is
-# fully determined by two values we already have (SERVER_NAME and DOC_ROOT).
+# Unlike the assess-* drop-ins this is a COMPLETE server{} block, because it is
+# included at the http{} level (see ensure_site_d_include). It is GENERATED
+# rather than copied from GCS: its content is fully determined by two values we
+# already have (SERVER_NAME and DOC_ROOT).
 #
-# `root` rather than `alias`: alias is the right tool when a URL PREFIX maps to a
-# differently-named dir (/assess-ui/ -> /var/www/app/assess-ui/). This block
-# serves the whole host from one tree, so the URI appends to the root directly.
+# `root` rather than `alias` here — the reverse of assess-ui.sh. alias is the
+# right tool when a URL PREFIX maps to a differently-named dir (/assess-ui/ ->
+# /var/www/app/assess-ui/). This block serves the whole host from one tree, so
+# the URI appends to the root directly and `root` states that plainly.
 #
 # NO default_server on the listen directive: that is the image's `_` block, and
 # claiming it here would both be a duplicate-default error and hijack every
-# unmatched Host on the VM.
+# unmatched Host on the VM. This block answers for its server_name only;
+# everything else keeps falling through to the baked default exactly as before.
 #
-# NO `include /etc/nginx/app.d/*.conf;` — the one line that distinguishes this
-# script from ziniapps-go.sh. This is the marketing host; the product is on
-# go.ziniapps.com and is linked absolutely from this site's js/config.js.
-# Including app.d would serve /assess-ui/ and /assess-exam/ here too, giving the
-# app a second origin: sessions and cookies set on one host would not be seen on
-# the other, and search engines would index a duplicate. Requests for those paths
-# on this host correctly 404 via the try_files below.
+# include app.d: keeps /assess-ui/, /assess-exam/ and /assess-server/ reachable on
+# this host. Longest-prefix matching means those locations win over `location /`
+# below, so the landing page's relative links resolve. See the header for why
+# this line is load-bearing rather than defensive.
 #
-# Caching: the three no-store-ish headers go on EVERY response from this site so
-# nothing is reused from cache without a revalidation round-trip and a redeploy
-# takes effect immediately. `always` makes them apply to error responses too
-# (add_header otherwise covers only 2xx/3xx). Note that add_header in a nested
-# location REPLACES any inherited set rather than adding to it, so EACH location
-# that can produce a response repeats them — including the internal /404.html
-# block, which is a separate location and would otherwise be cacheable.
+# Caching: the three no-store-ish headers go on EVERY response this block itself
+# serves, so nothing is reused from cache without a revalidation round-trip and a
+# redeploy takes effect immediately. `always` makes them apply to error responses
+# too (add_header otherwise covers only 2xx/3xx). Note that add_header in a nested
+# location REPLACES any inherited set rather than adding to it, so each location
+# repeats them — which is also why the included app.d drop-ins carry their own
+# copies rather than relying on anything set here.
 write_nginx_conf() {
   echo "Writing nginx server block ${NGINX_CONF}..."
 
   cat >"$NGINX_CONF" <<EOF
-# ${APP_NAME} — generated by build-app-install/vm/${APP_NAME}.sh. Do not edit by
+# ${APP_NAME} — generated by build-app-install/vm/apps/${APP_NAME}/${APP_NAME}.sh. Do not edit by
 # hand: the next deploy overwrites this file. A COMPLETE server block (this is
 # included at the http{} level, not inside the image's default server).
 
@@ -483,12 +542,17 @@ server {
     root ${DOC_ROOT};
     index index.html;
 
+    # Let the app tier decide its own body limit, matching the image's default
+    # server; 0 disables nginx's 1m cap.
     client_max_body_size 0;
 
-    # NOTE: app.d is deliberately NOT included here (it IS on go.ziniapps.com).
-    # The product must have exactly one origin; see the header of
-    # build-app-install/vm/${APP_NAME}.sh.
+    # Per-PATH apps (assess-ui, assess-exam, assess-server) written by their own
+    # deploy scripts. Included here so they stay reachable on this host now that
+    # it no longer falls through to the default server. Their /<ctx>/ prefixes
+    # are longer than "/" below, so nginx matches them first.
+    include ${NGINX_APP_D}/*.conf;
 
+    # The landing page itself: everything the prefixes above did not claim.
     location / {
         # Plain static serving: no SPA fallback, so an unknown path is a real 404
         # rather than a silent index.html.
@@ -496,20 +560,6 @@ server {
 
         # Never reuse a cached response without revalidating — a redeploy is
         # picked up on the next request. Applied to every file by design.
-        add_header Cache-Control "no-cache, must-revalidate" always;
-        add_header Pragma "no-cache" always;
-        add_header Expires 0 always;
-    }
-
-    # The site ships its own 404 page; serve it instead of nginx's default.
-    # Marked internal so it cannot be requested directly as /404.html.
-    error_page 404 /404.html;
-    location = /404.html {
-        internal;
-
-        # Repeated, not inherited: add_header in a nested location REPLACES the
-        # inherited set rather than adding to it, so without these three the 404
-        # page would be the one response from this site a browser may cache.
         add_header Cache-Control "no-cache, must-revalidate" always;
         add_header Pragma "no-cache" always;
         add_header Expires 0 always;
@@ -524,7 +574,9 @@ EOF
 #
 # `nginx -t` first, and treated as fatal: a reload with a broken config leaves
 # the old workers running, so nginx would keep serving the PREVIOUS site while
-# reporting success. Failing here surfaces that instead of hiding it.
+# reporting success. Failing here surfaces that instead of hiding it. The test
+# covers every app.d and site.d file, so a sibling's broken config fails this too
+# — correct, since the reload would not have applied either way.
 #
 # reload (SIGHUP), not restart: it re-reads config and cycles workers without
 # dropping connections or a window where :80 is unbound.
@@ -548,10 +600,11 @@ main() {
   parse_args "$@"
   require_tools
 
+  # Paths that depend only on APP_ENV / APP_NAME.
   INSTALL_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/install"
-  # Staging dir is this app's own sibling of the clone under the shared deploy
-  # root: /tmp/deployza/repo holds the pushed vm/ folder, /tmp/deployza/
-  # <APP_NAME> is ours.
+  # Staging dir is this app's own sibling of the pushed scripts under the shared
+  # deploy root: /tmp/deployza/repo holds the pushed vm/ folder, /tmp/deployza/
+  # <APP_NAME> is ours. Same path whether pushed or run standalone over SSH.
   STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
   INSTALL_PROPS="${STAGE_DIR}/install.properties"
 

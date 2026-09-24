@@ -1,8 +1,9 @@
-# flavor: mysql
+# system: nginx
 #
 # A COMPLETE collector config, except for two tokens (@EXPORTER@ and
-# @EXPORTER_NAME@) that push.sh fills from exporters/<backend>.yaml. Nothing
-# merges this with anything: apply.sh swaps it in whole.
+# @EXPORTER_NAME@) that push.sh fills from vm/vms/<vm>/exporter.yaml — the
+# target host's exporter, which is the only source of one.
+# Nothing merges this with anything: apply.sh swaps it in whole.
 #
 # THIN BY DESIGN. It tails, stamps resource attributes, and ships. There is no
 # grok, no JSON parsing, no severity mapping and no per-application handling —
@@ -27,13 +28,13 @@ receivers:
   journald:
     directory: /var/log/journal
 
-  filelog/mysql:
+  filelog/nginx:
     include:
-      - /var/log/mysql/*.log
+      - /var/log/nginx/*.log
     include_file_path: true
     start_at: end
     attributes:
-      log.type: mysql
+      log.type: nginx
 
 processors:
   # FIRST in the pipeline, always. A collector that OOMs is a collector that
@@ -57,7 +58,7 @@ processors:
   resource:
     attributes:
       - key: image.flavor
-        value: mysql
+        value: nginx
         action: upsert
       - key: deployment.environment
         value: ${env:OTEL_DEPLOY_ENV}
@@ -78,7 +79,7 @@ service:
   extensions: [health_check]
   pipelines:
     logs:
-      receivers: [journald, filelog/mysql]
+      receivers: [journald, filelog/nginx]
       processors: [memory_limiter, resourcedetection, resource, batch]
       exporters: [@EXPORTER_NAME@]
 

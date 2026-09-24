@@ -1,8 +1,9 @@
-# flavor: mcp
+# system: mysql
 #
 # A COMPLETE collector config, except for two tokens (@EXPORTER@ and
-# @EXPORTER_NAME@) that push.sh fills from exporters/<backend>.yaml. Nothing
-# merges this with anything: apply.sh swaps it in whole.
+# @EXPORTER_NAME@) that push.sh fills from vm/vms/<vm>/exporter.yaml — the
+# target host's exporter, which is the only source of one.
+# Nothing merges this with anything: apply.sh swaps it in whole.
 #
 # THIN BY DESIGN. It tails, stamps resource attributes, and ships. There is no
 # grok, no JSON parsing, no severity mapping and no per-application handling —
@@ -27,6 +28,14 @@ receivers:
   journald:
     directory: /var/log/journal
 
+  filelog/mysql:
+    include:
+      - /var/log/mysql/*.log
+    include_file_path: true
+    start_at: end
+    attributes:
+      log.type: mysql
+
 processors:
   # FIRST in the pipeline, always. A collector that OOMs is a collector that
   # takes its host's memory with it; this makes it drop data instead.
@@ -49,7 +58,7 @@ processors:
   resource:
     attributes:
       - key: image.flavor
-        value: mcp
+        value: mysql
         action: upsert
       - key: deployment.environment
         value: ${env:OTEL_DEPLOY_ENV}
@@ -70,7 +79,7 @@ service:
   extensions: [health_check]
   pipelines:
     logs:
-      receivers: [journald]
+      receivers: [journald, filelog/mysql]
       processors: [memory_limiter, resourcedetection, resource, batch]
       exporters: [@EXPORTER_NAME@]
 

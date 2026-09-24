@@ -45,7 +45,7 @@ set -euo pipefail
 #   * Pushed (the normal path): its output goes to wherever the pusher ran it —
 #     there is no systemd unit and no journal of its own. Capture it there.
 #   * Run manually over SSH: output goes to your terminal; capture with
-#       sudo bash hundi-ui.sh <APP_ENV> 2>&1 | tee /tmp/hundi-ui.log
+#       sudo bash apps/hundi-ui/hundi-ui.sh <APP_ENV> 2>&1 | tee /tmp/hundi-ui.log
 #
 # This script only DEPLOYS the WAR — the app then runs inside the separate
 # 'tomcat' service, whose logs are elsewhere:
@@ -64,7 +64,7 @@ set -euo pipefail
 # --- Fixed identity -----------------------------------------------------------
 # This script IS the hundi-ui installer, so APP_NAME is fixed rather than taken
 # from the caller. (The pusher resolves this very file by that name —
-# <clone>/vm/hundi-ui.sh — so the name is already implied.) Only APP_ENV varies
+# <clone>/vm/apps/hundi-ui/hundi-ui.sh — so the name is already implied.) Only APP_ENV varies
 # (development/production) and is the sole argument.
 readonly APP_NAME="hundi-ui"
 
@@ -74,15 +74,16 @@ readonly TOMCAT_USER="tomcat"
 readonly TOMCAT_GROUP="tomcat"
 
 # --- Shared estate constants --------------------------------------------------
-# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, beside
-# this script, so that changing the artifact bucket (or any path the images
-# bake) is one edit for every VM app instead of one per app. docker/ keeps its
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, at the
+# vm/ root, two levels up from this script (one copy for the whole tree),
+# so that changing the artifact bucket (or any path the images bake) is one
+# edit for every VM app instead of one per app. docker/ keeps its
 # OWN common.sh — the two platform folders are self-contained, so a bucket
 # change is two edits, one per folder. common.sh documents what belongs there
 # and what deliberately stays here (anything per-app).
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=./common.sh
-source "${SCRIPT_DIR}/common.sh"
+# shellcheck source=../../common.sh
+source "${SCRIPT_DIR}/../../common.sh"
 
 # --- Populated in main() from the APP_ENV argument ----------------------------
 APP_ENV=""              # the single positional argument ("$1"): dev/production

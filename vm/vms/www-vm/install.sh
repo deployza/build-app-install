@@ -2,17 +2,20 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# www-install.sh — ORCHESTRATOR for the www.deployza.com host. This is the
-# <APP_NAME>.sh that is PUSHED to the VM and run there
+# vms/www-vm/install.sh — ORCHESTRATOR for the www.deployza.com host. This is
+# the script that is PUSHED to the VM and run there
 # (APP_NAME="www-install"). It does NOT deploy anything itself; it installs
 # every app that belongs on this VM by invoking, in order:
 #
-#   1. www-website.sh    www.deployza.com            the marketing site
-#                                                    (per-HOST site, site.d)
-#   2. www-apidocs.sh    www.deployza.com/api-docs/  the MkDocs API docs
-#                                                    (per-PATH app, app.d)
+#   1. deployza/www-website.sh   www.deployza.com            the marketing site
+#                                                            (per-HOST, site.d)
+#   2. deployza/www-apidocs.sh   www.deployza.com/api-docs/  the MkDocs API docs
+#                                                            (per-PATH, app.d)
 #
-# Same shape as assess-install.sh — see that file for the pattern this follows.
+# Both children live under vm/apps/<app>/ like every other app, so CHILD_SCRIPTS
+# below reaches them as ../../apps/<app>/<app>.sh.
+#
+# Same shape as vms/ziniapps-vm/install.sh — see that file for the pattern this follows.
 #
 # WHY TWO CHILDREN RATHER THAN ONE SCRIPT. These two used to be a single
 # www-website.sh. They share a hostname and nothing else: the site is a WAR
@@ -38,16 +41,16 @@ set -euo pipefail
 # transient network/secret/mkdocs problem never takes this host's deploy down.
 # See refresh_docs_now in that script.
 #
-# Contract: invoked as `www-install.sh APP_ENV`.
+# Contract: invoked as `vms/www-vm/install.sh APP_ENV`.
 # APP_NAME is fixed to "www-install" here (the pusher resolves this file by
-# that name — <clone>/vm/www-install.sh); the single argument is APP_ENV, which
-# is passed through verbatim to every child.
+# that name — <clone>/vm/vms/www-vm/install.sh); the single argument is
+# APP_ENV, which is passed through verbatim to every child.
 #
 # Logs — like the child scripts, this only echoes to stdout/stderr. At boot its
 # output (and the children's) goes wherever the pusher ran it — there is no
 # systemd unit and no journal of its own.
 # Run manually over SSH:
-#   sudo bash www-install.sh <APP_ENV> 2>&1 | tee /tmp/www-install.log
+#   sudo bash vms/www-vm/install.sh <APP_ENV> 2>&1 | tee /tmp/www-install.log
 # -----------------------------------------------------------------------------
 
 # Directory this script lives in, so the children are found regardless of CWD
@@ -57,8 +60,8 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The child deploy scripts, run in this order. See the header for why the site
 # goes first.
 readonly CHILD_SCRIPTS=(
-  "www-website.sh"
-  "www-apidocs.sh"
+  "../../apps/www-website/www-website.sh"
+  "../../apps/www-apidocs/www-apidocs.sh"
 )
 
 # Per-child log dir (a sibling of the clone under the deploy root:
@@ -135,7 +138,7 @@ main() {
 
     # We invoke children via `bash "$child_path"` (in run_child), which needs only
     # read permission — the execute bit is not load-bearing here. Set it anyway so
-    # a child stays runnable standalone (`./www-website.sh`), mirroring the +x
+    # a child stays runnable standalone (`./apps/www-website/www-website.sh`), mirroring the +x
     # the pusher applies to this orchestrator.
     chmod +x "$child_path" 2>/dev/null || true
 

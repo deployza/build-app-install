@@ -35,18 +35,40 @@ One script per app **per platform**:
 
 ```
 build-app-install/
-├── vm/
-│   ├── common.sh          # constants SOURCED by every vm/ script
-│   └── <APP_NAME>.sh      # deploy into a native systemd Tomcat on a VM
+├── vm/                    # organised by LAYER, not by product
+│   ├── common.sh          # ONE copy at the vm/ ROOT, sourced as ../../common.sh
+│   ├── apps/<app>/<app>.sh        # install ONE app (+ its otel yaml, if any)
+│   ├── systems/<server>.yaml      # what to collect on a server: tomcat, nginx,
+│   │                              #   nginx-python, mysql, mcp
+│   └── vms/<vm>/
+│       ├── install.sh             # install everything ONE HOST runs
+│       └── exporter.yaml          # where that host's logs go — ONE per VM
 ├── otel/                  # NOT an app — operational config, PUSHED on demand
 └── docker/
     ├── common.sh          # constants SOURCED by every docker/ script
     └── <APP_NAME>.sh      # deploy into the PID-1 Tomcat of a container
 ```
 
-Either way the scripts land at `/tmp/deployza/repo` and are invoked as
-`<platform>/<APP_NAME>.sh <APP_ENV>`. `APP_NAME` selects the script (its
-basename); `APP_ENV` (`development` / `production`) is the sole argument.
+Either way the scripts land at `/tmp/deployza/repo`. A container runs
+`docker/<APP_NAME>.sh <APP_ENV>`; a VM runs either one app,
+`vm/apps/<APP_NAME>/<APP_NAME>.sh <APP_ENV>`, or everything a host needs,
+`vm/vms/<VM>/install.sh <APP_ENV>`. `APP_ENV` (`development` / `production`) is
+the sole argument in every case.
+
+**`vm/` is grouped by layer, `docker/` is flat.** The three VM folders answer
+three different questions, and keeping them apart is the point:
+
+| folder | question | keyed by |
+|---|---|---|
+| `vm/apps/` | what does this **app** need to install? | app name |
+| `vm/systems/` | what logs does this **server** produce? | tomcat, nginx, mysql, … |
+| `vm/vms/` | what runs on this **host**, and where do its logs go? | VM name |
+
+A product (`assess`, `ziniapps`) is not a folder anywhere: it is a set of apps
+that a host happens to run, and `vm/vms/<vm>/install.sh` is the only place that
+set is written down. `ziniapps-vm` runs the three assess apps and both ziniapps
+sites, which is exactly why exporters are per-VM — one collector per host means
+one destination per host.
 
 Each script: downloads the app's `conf/` folder + WAR from **GCS**
 (`gs://dz-builds/<APP_ENV>/<APP_NAME>/`), reads `install.properties`,
@@ -77,8 +99,8 @@ so a VM with nothing pushed to it collects nothing and sends nowhere. See
 > ## ⚠ `vm-startup.sh` IS GONE — and nothing replaces it yet
 >
 > **Done 2026-09-24** (ops-execution.md Part C): the boot-time launcher that
-> cloned this repo and ran `vm/<APP_NAME>.sh` is deleted, along with its systemd
-> unit and installer, and `dz-ziniapps/vms.tf` no longer sets
+> cloned this repo and ran `vm/<APP_NAME>.sh` (the layout was flat then) is
+> deleted, along with its systemd unit and installer, and `dz-ziniapps/vms.tf` no longer sets
 > `APP_NAME`/`APP_ENV`. VMs are push-only. `docker-startup.sh` stays, so the
 > `vm/` ↔ `docker/` symmetry described below is **permanently broken by
 > design** — do not restore the VM launcher for consistency.
@@ -90,12 +112,14 @@ so a VM with nothing pushed to it collects nothing and sends nowhere. See
 >
 > **Deploying by hand, meanwhile:** copy the whole `vm/` folder (the app script
 > **and** `common.sh` — every script `source`s it) to the instance over the IAP
-> tunnel and run `sudo bash vm/<APP_NAME>.sh <APP_ENV>`. Shipping a single
-> script breaks at the `source` line.
+> tunnel and run `sudo bash vm/vms/<VM>/install.sh <APP_ENV>` (or a single
+> app's `vm/apps/<APP_NAME>/<APP_NAME>.sh`). Shipping one script, or one layer
+> folder, breaks at the `source` line.
 >
 > **Writing the pusher** is the next job: tar `vm/`, ship it to
-> `/tmp/deployza/repo`, run `vm/<app>.sh <APP_ENV>`. The scripts themselves need
-> no changes — they already take `APP_ENV` as `$1`.
+> `/tmp/deployza/repo`, run `vm/vms/<vm>/install.sh <APP_ENV>`. The scripts
+> themselves need no changes — they already take `APP_ENV` as `$1`; the pusher
+> just has to know which VM it is pushing to.
 
 ## Two kinds of app: per-PATH and per-HOST
 
@@ -155,7 +179,7 @@ Apps today: **`assess-server`**, **`assess-ui`**, **`assess-exam`**,
 Keep the two as explicit copies. They share the same shape but differ where the
 runtimes differ; do **not** merge them behind a platform flag.
 
-| | `vm/<app>.sh` | `docker/<app>.sh` |
+| | `vm/apps/<app>/<app>.sh` | `docker/<app>.sh` |
 | --- | --- | --- |
 | Tomcat identity | `tomcat` **systemd** service, runs as the `tomcat` user | **PID 1** (root); no `tomcat` user exists |
 | File ownership | `install -o tomcat -g tomcat`, `chown tomcat:tomcat` | **no** `chown` (would fail "invalid user: tomcat" and, under `set -e`, abort the deploy / kill the container) |
@@ -164,7 +188,9 @@ runtimes differ; do **not** merge them behind a platform flag.
 
 ## `common.sh` — one per platform folder
 
-Each of `vm/` and `docker/` has **its own** `common.sh`, sourced by every deploy
+Each of `vm/` and `docker/` has **its own** `common.sh` — `vm/common.sh` sits at
+the `vm/` root and is sourced as `../../common.sh` from inside `vm/apps/<app>/`,
+`docker/common.sh` sits beside its flat scripts — sourced by every deploy
 script in that folder from its own directory:
 
 ```bash
@@ -183,7 +209,8 @@ per app:
 | nginx seams | `NGINX_APP_D`, `NGINX_SITE_D`, `NGINX_CONF_MAIN`, `INCLUDE_MARKER`, `NGINX_SERVICE`, `NGINX_USER`, `NGINX_GROUP` | **none** — Tomcat is PID 1 and serves directly; there is no nginx in an app container |
 
 **Two copies is the deliberate choice**, keeping each platform folder
-self-contained for the same reason `vm/<app>.sh` and `docker/<app>.sh` are
+self-contained for the same reason `vm/apps/<app>/<app>.sh` and
+`docker/<app>.sh` are
 separate copies (next section). **The price: `GCS_BASE_URL` and `STAGE_ROOT`
 appear in both files — change the bucket in BOTH, or the two platforms pull
 from different places.** Do not "fix" this by having one folder source the
@@ -226,7 +253,8 @@ the folder, not the file.
 
 ## When adding a new app
 
-1. Add `vm/<app>.sh` **and** `docker/<app>.sh`. Pick the template by model (see
+1. Add `vm/apps/<app>/<app>.sh` **and** `docker/<app>.sh`, then add the app to
+   the `CHILD_SCRIPTS` list of every `vm/vms/<vm>/install.sh` that should run it. Pick the template by model (see
    "Two kinds of app" above): `assess-server` for a per-PATH app backed by
    Tomcat, `assess-ui` for a per-PATH static bundle, `ziniapps-www` for a
    per-HOST static site. Keep the vm/docker differences above.
@@ -236,8 +264,8 @@ the folder, not the file.
    `STAGE_ROOT` or the `NGINX_*` constants locally.
 3. Ensure the app's `conf/` (incl. `install.properties`) + WAR are published to
    `gs://dz-builds/<env>/<app>/`.
-4. Deploy it: on a VM, push `vm/` to the host and run
-   `vm/<app>.sh <env>`; for a container, start it with env
+4. Deploy it: on a VM, push the whole `vm/` tree to the host and run
+   `vm/apps/<app>/<app>.sh <env>` (or that host's `vm/vms/<vm>/install.sh`); for a container, start it with env
    `APP_NAME=<app>` `APP_ENV=<env>`.
 
 ## Gotchas

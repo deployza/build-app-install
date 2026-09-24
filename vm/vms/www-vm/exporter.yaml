@@ -1,0 +1,52 @@
+# name: elasticsearch/www-vm
+#
+# www-vm's Otel exporter — ONE PER VM, because a VM runs one collector with one
+# config.yaml. This is the whole reason exporters live under vms/ and not beside
+# an app or a product: there is exactly one destination per host, and every app
+# on www-vm ships through it.
+#
+# The first line above is LOAD-BEARING: push.sh reads the pipeline key from it,
+# so the key and the block below can never disagree. THIS HEADER IS STRIPPED at
+# render time: splicing starts at the first non-comment line below and lands at
+# the @EXPORTER@ placeholder in vm/systems/<server>.yaml, already indented to sit
+# under `exporters:`. Comments INSIDE the block are kept — they end up in
+# config.yaml on the VM, which is where they are wanted.
+#
+# Selected with `otel/push.sh --vm www-vm`, which resolves this path.
+#
+# THIS HOST DOES NOT EXIST YET. www-website and www-apidocs are written and
+# vms/www-vm/install.sh is ready, but nothing is baked or running. The file is
+# here so the exporter exists the day the host does; delete the folder if that
+# host is not coming.
+#
+# Credentials come from /etc/otelcol/env (640 root:otelcol), written by apply.sh
+# and fetched from Secret Manager by whoever runs push.sh. They are NOT in this
+# file and must never be: this file is in git.
+  elasticsearch/www-vm:
+    endpoints:
+      - ${env:OTEL_WWW_VM_ES_ENDPOINT}
+    api_key: ${env:OTEL_WWW_VM_ES_API_KEY}
+
+    # One index per VM. Every record also carries service.name,
+    # deployment.environment, image.flavor and log.type from the resource
+    # processor, so telling one app's lines from another's inside this index is
+    # a QUERY concern — which is the only way it can work here anyway, since the
+    # apps on this host share a collector.
+    logs_index: logs-www-vm
+
+    retry:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 60s
+      # Give up after 5 minutes rather than holding a growing in-memory queue
+      # against a destination that is not coming back.
+      max_elapsed_time: 300s
+
+    sending_queue:
+      enabled: true
+      # IN MEMORY, NOT ON DISK. A persistent queue needs the file_storage
+      # extension, which this file cannot declare (it only supplies an exporter
+      # block), and durable buffering is a job for the gateway collector — see
+      # build-docs/ops-execution.md. The cost of that choice: logs buffered here
+      # are lost if the VM restarts while the destination is down.
+      queue_size: 1000

@@ -3,20 +3,26 @@ set -euo pipefail
 
 # TEMPORARY: this installer is disabled — do nothing and return successfully.
 # Remove this block to restore the original behaviour (everything below is intact).
-# echo "assess-install.sh: temporarily disabled, skipping install."
+# echo "vms/ziniapps-vm/install.sh: temporarily disabled, skipping install."
 # exit 0
 
 # -----------------------------------------------------------------------------
-# assess-install.sh — ORCHESTRATOR. This is the <APP_NAME>.sh the pusher ships
-# and runs (APP_NAME="assess-install"). It does NOT
+# vms/ziniapps-vm/install.sh — ORCHESTRATOR for the ziniapps-vm host. This is
+# the script the pusher ships and runs (APP_NAME="assess-install"). It does NOT
 # deploy anything itself; it installs every app that belongs on this VM by
 # invoking, in order:
 #
-#   1. assess-server.sh    the assess backend WAR (DB + app.properties + logback)
-#   2. assess-ui.sh        the static UI WAR
-#   3. assess-exam.sh      the exam WAR
-#   4. ziniapps-go.sh      go.ziniapps.com   landing page  (per-HOST site)
-#   5. ziniapps-www.sh     www.ziniapps.com  marketing site (per-HOST site)
+#   1. assess/assess-server.sh      the assess backend WAR (DB + app.properties
+#                                   + logback)
+#   2. assess/assess-ui.sh          the static UI WAR
+#   3. assess/assess-exam.sh        the exam WAR
+#   4. ziniapps/ziniapps-go.sh      go.ziniapps.com   landing page  (per-HOST)
+#   5. ziniapps/ziniapps-www.sh     www.ziniapps.com  marketing site (per-HOST)
+#
+# The children are grouped by PRODUCT, not by which VM they land on: the three
+# assess apps sit beside us in vm/assess/, the two sites in vm/ziniapps/. This
+# host happens to run both, so the child list crosses a folder — see
+# CHILD_SCRIPTS below, where the paths are relative to this script's dir.
 #
 # Each child is a self-contained deploy script with its own install.properties
 # and GCS artifacts. The first three are per-PATH apps sharing the live Tomcat
@@ -26,17 +32,17 @@ set -euo pipefail
 # /etc/nginx/site.d/ rather than a path prefix in /etc/nginx/app.d/.
 #
 # ORDERING IS LOAD-BEARING for the two site scripts, though only in one
-# direction: ziniapps-go.sh's server block does `include /etc/nginx/app.d/*.conf`
+# direction: ziniapps/ziniapps-go.sh's server block does `include /etc/nginx/app.d/*.conf`
 # so that go.ziniapps.com keeps serving /assess-ui/ etc. That include is resolved
 # by nginx at reload time, not at write time, so the assess drop-ins do not
 # strictly have to exist first — but running the per-path apps before the sites
 # means every reload along the way tests a complete config, and a first boot
 # never has a window where go.ziniapps.com/assess-ui/ 404s.
 #
-# Contract: invoked as `assess-install.sh APP_ENV`.
+# Contract: invoked as `vms/ziniapps-vm/install.sh APP_ENV`.
 # APP_NAME is fixed to "assess-install" here (the pusher resolves this file by
-# that name — <clone>/vm/assess-install.sh); the single argument is APP_ENV,
-# which is passed through verbatim to every child.
+# that name — <clone>/vm/vms/ziniapps-vm/install.sh); the single argument is
+# APP_ENV, which is passed through verbatim to every child.
 #
 # Ordering: the backend goes first so its DB/context are in place before the UI
 # and exam apps come up; the two ziniapps sites go last (see above). If any child
@@ -47,22 +53,30 @@ set -euo pipefail
 # output (and the children's) goes wherever the pusher ran it — there is no
 # systemd unit and no journal of its own.
 # Run manually over SSH:
-#   sudo bash assess-install.sh <APP_ENV> 2>&1 | tee /tmp/assess.log
+#   sudo bash vms/ziniapps-vm/install.sh <APP_ENV> 2>&1 | tee /tmp/assess.log
 # -----------------------------------------------------------------------------
 
 # Directory this script lives in, so the children are found regardless of CWD
 # (the pusher ships vm/ to /tmp/deployza/repo and runs us from there).
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# The child deploy scripts, run in this order. The first three are per-PATH apps
-# (Tomcat contexts + app.d location blocks); the last two are per-HOST static
-# sites (site.d server blocks). See the header for why the sites come last.
+# The child deploy scripts, run in this order, as paths RELATIVE TO SCRIPT_DIR
+# (vm/vms/ziniapps-vm/). Every app lives under vm/apps/<app>/, one folder per
+# app, so each child is reached as ../../apps/<app>/<app>.sh. The first three
+# are per-PATH apps (Tomcat contexts + app.d location blocks); the last two are
+# per-HOST static sites (site.d server blocks). See the header for why the sites
+# come last. The whole vm/ tree is shipped together, so the ../.. costs nothing
+# at deploy time.
+#
+# NOT IN THIS LIST: hundi-ui. vm/apps/hundi-ui/ exists and this host is where it
+# is meant to run, but it has never been in the install order and adding it is a
+# deploy change, not a reorganisation. Add it deliberately.
 readonly CHILD_SCRIPTS=(
-  "assess-server.sh"
-  "assess-ui.sh"
-  "assess-exam.sh"
-  "ziniapps-go.sh"
-  "ziniapps-www.sh"
+  "../../apps/assess-server/assess-server.sh"
+  "../../apps/assess-ui/assess-ui.sh"
+  "../../apps/assess-exam/assess-exam.sh"
+  "../../apps/ziniapps-go/ziniapps-go.sh"
+  "../../apps/ziniapps-www/ziniapps-www.sh"
 )
 
 # Per-child log dir (a sibling of the clone under the deploy root:
@@ -139,7 +153,7 @@ main() {
 
     # We invoke children via `bash "$child_path"` (in run_child), which needs only
     # read permission — the execute bit is not load-bearing here. Set it anyway so
-    # a child stays runnable standalone (`./assess-server.sh`), mirroring the +x
+    # a child stays runnable standalone (`./apps/assess-server/assess-server.sh`), mirroring the +x
     # the pusher applies to this orchestrator.
     chmod +x "$child_path" 2>/dev/null || true
 

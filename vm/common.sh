@@ -1,19 +1,30 @@
-# vm/common.sh — constants shared by every VM deploy script in this folder.
+# vm/common.sh — constants shared by every VM deploy script under this folder.
+#
+# IT SITS AT THE vm/ ROOT, above the three layer folders. vm/ is organised by
+# LAYER, not by product:
+#
+#   vm/apps/<app>/<app>.sh        install one app
+#   vm/systems/<server>.yaml      what to collect on a given server
+#   vm/vms/<vm>/install.sh        install everything one HOST runs
+#   vm/vms/<vm>/exporter.yaml     where that host's logs go (one per VM)
+#
+# There is exactly ONE common.sh for all of them: these values are owned by the
+# infrastructure, not by an app, so a bucket change stays a single edit.
 #
 # NOT EXECUTABLE, NOT A DEPLOY SCRIPT. It is sourced (never run) by each
-# vm/<app>.sh, from its own directory:
+# vm/apps/<app>/<app>.sh, relative to that script's own directory:
 #
 #   readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-#   source "${SCRIPT_DIR}/common.sh"
+#   source "${SCRIPT_DIR}/../../common.sh"
 #
-# THE PUSHER MUST SHIP THE WHOLE vm/ FOLDER, not a single script: this file has
-# to be beside the script that sources it. A push that copied only
-# <APP_NAME>.sh would break at the `source` line. (Before 2026-09-24 a baked
-# boot launcher cloned the whole repo, which satisfied this for free; it is now
-# the pusher's job.)
+# THE PUSHER MUST SHIP THE WHOLE vm/ TREE, not a single script and not a single
+# folder: this file has to be two levels above the app that sources it, and
+# vm/vms/<vm>/install.sh reaches sideways into vm/apps/. A push that copied only
+# <APP_NAME>.sh would break at the `source` line. (Before 2026-09-24 a baked boot launcher cloned the whole
+# repo, which satisfied this for free; it is now the pusher's job.)
 #
 # THERE IS A SECOND COPY AT docker/common.sh, and that is deliberate: each
-# platform folder is self-contained, the same way vm/<app>.sh and
+# platform folder is self-contained, the same way vm/apps/<app>/<app>.sh and
 # docker/<app>.sh are separate copies rather than one script behind a flag
 # (CLAUDE.md, "vm/ vs. docker/"). The price is that GCS_BASE_URL and STAGE_ROOT
 # appear in both files — CHANGE THE BUCKET IN BOTH OR THE TWO PLATFORMS PULL
@@ -30,10 +41,10 @@
 # sites). Those stay in the script that owns them.
 #
 # Everything here is `readonly`: each deploy script is its own `bash` process
-# (the assess-install.sh orchestrator runs children via `bash <child>`), so the
-# file is sourced exactly once per process and a re-source cannot collide.
-# assess-install.sh itself does not source this — it deploys nothing, it only
-# invokes the children.
+# (a vms/<vm>/install.sh orchestrator runs children via `bash <child>`),
+# so the file is sourced exactly once per process and a re-source cannot
+# collide. The orchestrators themselves do not source this — they deploy
+# nothing, they only invoke the children.
 
 # --- Artifact store -----------------------------------------------------------
 # Base GCS location holding per-environment release artifacts. Each app's
