@@ -6,6 +6,6 @@ repo_dir: /tmp/deployza/repo
 #
 #   - { role: vm_unit, unit: assess-exam, tags: [apps, assess-exam] }
 #
-# `otel` runs vm/install-otel.sh; anything else runs vm/<vm>/install.sh with
+# `otel` runs vm/<vm>/install-otel.sh; anything else runs vm/<vm>/install.sh with
 # that unit, i.e. vm/<vm>/<unit>.sh.
 unit: ""

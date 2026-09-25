@@ -105,16 +105,16 @@ readonly TOMCAT_USER="tomcat"
 readonly TOMCAT_GROUP="tomcat"
 
 # --- Shared estate constants --------------------------------------------------
-# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, at the
-# vm/ root, two levels up from this script (one copy for the whole tree),
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in common.sh, beside
+# this script — this VM folder's own copy, so the folder is self-contained,
 # so that changing the artifact bucket (or any path the images bake) is one
-# edit for every VM app instead of one per app. docker/ keeps its
+# edit per VM folder instead of one per app. docker/ keeps its
 # OWN common.sh — the two platform folders are self-contained, so a bucket
 # change is two edits, one per folder. common.sh documents what belongs there
 # and what deliberately stays here (anything per-app).
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../common.sh
-source "${SCRIPT_DIR}/../common.sh"
+# shellcheck source=common.sh
+source "${SCRIPT_DIR}/common.sh"
 
 # --- Populated in main() from the APP_ENV argument ----------------------------
 APP_ENV=""              # the single positional argument ("$1"): dev/production

@@ -37,5 +37,5 @@ readonly UNITS=(
   otel
 )
 
-source "${SCRIPT_DIR}/../units.sh"
+source "${SCRIPT_DIR}/units.sh"
 run_units "$@"

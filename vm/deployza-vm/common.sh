@@ -1,32 +1,33 @@
-# vm/common.sh — constants shared by every VM deploy script under this folder.
+# vm/deployza-vm/common.sh — constants shared by every deploy script in this folder.
 #
-# IT SITS AT THE vm/ ROOT, above one folder per VM. vm/ is organised by HOST:
+# EACH VM FOLDER IS SELF-CONTAINED — everything a host runs sits in its folder:
 #
 #   vm/<vm>/install.sh      run every unit this host has, in order — or any of
 #                           them: `install.sh production assess-exam`
 #   vm/<vm>/<app>.sh        ONE UNIT: install one app on this host
 #   vm/<vm>/otel.yaml       this host's COMPLETE collector config — receivers,
 #                           processors, exporters, service
-#   vm/install-otel.sh      ONE UNIT (`otel`): validate, swap in, restart and
-#                           verify vm/<vm>/otel.yaml; roll back on failure
-#   vm/units.sh             the runner every install.sh sources
-#   vm/inert.yaml           collect nothing, send nowhere (hosts with no folder)
+#   vm/<vm>/install-otel.sh ONE UNIT (`otel`): validate, swap in, restart and
+#                           verify otel.yaml; roll back on failure
+#   vm/<vm>/units.sh        the runner install.sh sources
+#   vm/<vm>/inert.yaml      collect nothing, send nowhere (--inert)
+#   vm/<vm>/common.sh       this file
 #
 # An app that ran on two hosts would have a copy of its script in each folder.
 # None does today.
 #
-# There is exactly ONE common.sh for all of them: these values are owned by the
-# infrastructure, not by an app, so a bucket change stays a single edit.
+# EVERY VM FOLDER HAS ITS OWN COPY OF THIS FILE, identical today. The price:
+# CHANGE THE BUCKET (or any value below) IN EVERY vm/<vm>/common.sh — and in
+# docker/common.sh — or hosts pull from different places.
 #
-# NOT EXECUTABLE, NOT A DEPLOY SCRIPT. It is sourced (never run), one level up
-# from the sourcing script's own directory:
+# NOT EXECUTABLE, NOT A DEPLOY SCRIPT. It is sourced (never run) from the
+# sourcing script's own directory:
 #
 #   readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-#   source "${SCRIPT_DIR}/../common.sh"      # from vm/<vm>/
+#   source "${SCRIPT_DIR}/common.sh"
 #
-# THE PUSHER MUST SHIP THIS FILE WITH THE VM FOLDER: an app script copied on its
-# own breaks at the `source` line. ansible/roles/vm_push ships vm/common.sh,
-# vm/units.sh, vm/install-otel.sh, vm/inert.yaml and vm/<vm>/ together.
+# SHIP THE FOLDER, NOT A FILE: an app script copied on its own breaks at the
+# `source` line. ansible/roles/vm_push ships vm/<vm>/ whole.
 #
 # THERE IS A SECOND COPY AT docker/common.sh, and that is deliberate: each
 # platform folder is self-contained, the same way vm/<vm>/<app>.sh and

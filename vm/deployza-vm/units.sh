@@ -1,16 +1,19 @@
-# vm/units.sh — the runner behind every vm/<vm>/install.sh.
+# vm/<vm>/units.sh — the runner behind this folder's install.sh.
+#
+# EVERY VM FOLDER HAS ITS OWN COPY, so each folder is self-contained. The
+# copies are identical today; a change to one is a change to all of them.
 #
 # SOURCED, NEVER EXECUTED (no shebang, no `set -e`). A VM's install.sh declares
 # its ordered UNITS and hands its arguments to run_units:
 #
 #   readonly UNITS=(assess-server assess-ui otel)
-#   source "${SCRIPT_DIR}/../units.sh"
+#   source "${SCRIPT_DIR}/units.sh"
 #   run_units "$@"
 #
 # A UNIT is one piece of work on this host, and one of two kinds:
 #
 #   <app>   vm/<vm>/<app>.sh APP_ENV     install one app
-#   otel    vm/install-otel.sh --vm <vm> install vm/<vm>/otel.yaml
+#   otel    vm/<vm>/install-otel.sh     install vm/<vm>/otel.yaml
 #
 # USAGE, as seen through install.sh:
 #
@@ -37,7 +40,7 @@ _units_run_one() {
   local vm_dir="$1" vm="$2" app_env="$3" unit="$4"
   local -a cmd
   if [[ "$unit" == "otel" ]]; then
-    cmd=(bash "${vm_dir}/../install-otel.sh" --vm "$vm")
+    cmd=(bash "${vm_dir}/install-otel.sh" --vm "$vm")
   else
     [[ -f "${vm_dir}/${unit}.sh" ]] \
       || _units_die "no unit '${unit}' on ${vm} (expected ${vm_dir}/${unit}.sh, or 'otel' / 'apps')"

@@ -17,7 +17,7 @@ ansible/
 ## A VM is a list of units
 
 A **unit** is one piece of work: one app script (`vm/<vm>/<app>.sh`) or `otel`
-(`vm/install-otel.sh`, which installs `vm/<vm>/otel.yaml`). Each VM's playbook
+(`vm/<vm>/install-otel.sh`, which installs `vm/<vm>/otel.yaml`). Each VM's playbook
 lists its units in order, and **every unit is a tag**:
 
 ```bash
@@ -46,15 +46,17 @@ scripts:
 ```bash
 sudo bash vm/ziniapps-vm/install.sh production               # every unit
 sudo bash vm/ziniapps-vm/install.sh production assess-exam   # one
-sudo bash vm/install-otel.sh                                 # otel
+sudo bash vm/ziniapps-vm/install-otel.sh                     # otel
 ```
 
 ## The decisions worth knowing
 
 - **`vm_push` is tagged `always`**, so whatever `--tags` selects, the scripts are
-  on the box. It ships the host's whole `vm/<vm>/` folder plus `vm/common.sh`,
-  `vm/units.sh`, `vm/install-otel.sh` and `vm/inert.yaml` — the folder holds only
-  what that host runs, so nothing needs pruning. `/tmp/deployza/repo` is wiped
+  on the box. It ships the host's whole `vm/<vm>/` folder and nothing else —
+  the folder is self-contained (its own `common.sh`, `units.sh`,
+  `install-otel.sh` and `inert.yaml`) and holds only what that host runs, so
+  nothing needs pruning. Every host has a folder — `vm/mcp/` holds only
+  `install-otel.sh` and `inert.yaml` — and a host without one is refused. `/tmp/deployza/repo` is wiped
   first, so a removed unit cannot linger and still be runnable.
 - **The unit order is written twice**: in the playbook's role list and in
   `vm/<vm>/install.sh`'s `UNITS`. Tags must be static, so the playbook cannot read
@@ -72,7 +74,7 @@ sudo bash vm/install-otel.sh                                 # otel
 
 ## Adding a unit
 
-1. Put the script at `vm/<vm>/<unit>.sh` (source `../common.sh`).
+1. Put the script at `vm/<vm>/<unit>.sh` (source `common.sh`, beside it).
 2. Add it to `UNITS` in `vm/<vm>/install.sh`.
 3. Add `- { role: vm_unit, unit: <unit>, tags: [apps, <unit>] }` to
    `playbooks/<vm>.yml`, in the same position.

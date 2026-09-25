@@ -111,10 +111,10 @@ set -euo pipefail
 # varies (development/production) and is the sole argument.
 readonly APP_NAME="www-website"
 
-# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, at the
-# vm/ root, two levels up from this script (one copy for the whole tree),
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in common.sh, beside
+# this script — this VM folder's own copy, so the folder is self-contained,
 # so that changing the artifact bucket (or any path the images bake) is one
-# edit for every VM app instead of one per app. docker/ keeps its
+# edit per VM folder instead of one per app. docker/ keeps its
 # OWN common.sh — the two platform folders are self-contained, so a bucket
 # change is two edits, one per folder. common.sh documents what belongs there
 # and what deliberately stays here: APP_NAME above and DEFAULT_WEB_ROOT below
@@ -127,8 +127,8 @@ readonly APP_NAME="www-website"
 # first on a VM patches nginx.conf and the others find the marker and skip, so
 # the value must stay in sync across them.
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../common.sh
-source "${SCRIPT_DIR}/../common.sh"
+# shellcheck source=common.sh
+source "${SCRIPT_DIR}/common.sh"
 
 # Fallback for install.web.root — the parent holding the per-SITE doc roots.
 # Deliberately NOT /var/www/app (the assess-* default): that dir holds per-PATH

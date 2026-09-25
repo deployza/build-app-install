@@ -6,10 +6,11 @@
 # (vm_unit) only invoke.
 #
 # THE PAYLOAD IS THE HOST'S WHOLE FOLDER, NOT A PRUNED LIST: vm/<vm>/ holds only
-# what that host runs, so there is nothing to prune. Plus the four shared files
-# every folder needs (vm_push_shared). The folder name IS the inventory key IS
-# the GCE instance name; a host with no folder (mcp) gets only the shared files,
-# and install-otel.sh then installs inert.yaml.
+# what that host runs — its own common.sh, units.sh, install-otel.sh and
+# inert.yaml included — so there is nothing to prune and nothing to add. The
+# folder name IS the inventory key IS the GCE instance name, and EVERY HOST HAS
+# ONE: a host that collects nothing (mcp) has a folder holding only
+# install-otel.sh and inert.yaml. No folder is a refusal, not a fallback.
 
 - name: Look for this host's vm/ folder
   ansible.builtin.stat:
@@ -18,11 +19,18 @@
   become: false
   register: _vm_dir
 
+- name: Refuse a host with no vm/ folder
+  ansible.builtin.assert:
+    that: _vm_dir.stat.isdir | default(false)
+    fail_msg: >-
+      There is no vm/{{ inventory_hostname }}/ folder. Every host needs one —
+      even a host that collects nothing gets install-otel.sh and inert.yaml
+      there (see vm/mcp/).
+    quiet: true
+
 - name: Assemble the file list
   ansible.builtin.set_fact:
-    _payload: >-
-      {{ vm_push_shared
-         + (['vm/' ~ inventory_hostname] if _vm_dir.stat.isdir | default(false) else []) }}
+    _payload: "{{ ['vm/' ~ inventory_hostname] }}"
 
 - name: Shipping
   ansible.builtin.debug:
@@ -40,8 +48,8 @@
 - name: Pack, ship and unpack
   block:
     - name: Pack it
-      # Paths are relative to app_src_root so the tree unpacks as vm/..., which
-      # is what the scripts' `../common.sh` and `../install-otel.sh` assume.
+      # Paths are relative to app_src_root so the tree unpacks as vm/<vm>/...,
+      # which is the path vm_unit and a person on the box both run from.
       ansible.builtin.shell:
         cmd: >-
           tar czf '{{ _payload_dir.path }}/payload.tar.gz'

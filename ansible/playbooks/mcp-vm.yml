@@ -1,8 +1,8 @@
 ---
 # mcp-vm — the MCP server in dz-builds, inventory host `mcp`.
 #
-# ONE UNIT: otel. There is no vm/mcp/ folder, so nothing in this repo installs
-# an app here, and install-otel.sh installs vm/inert.yaml — collect nothing,
+# ONE UNIT: otel. vm/mcp/ holds no app scripts, so nothing in this repo installs
+# an app here, and vm/mcp/install-otel.sh installs vm/mcp/inert.yaml — collect nothing,
 # send nowhere — through the same validate, swap, restart and settle as a real
 # config. It still adds otelcol to its groups and asserts the backup slot.
 #

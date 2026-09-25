@@ -1,7 +1,7 @@
-# vm/inert.yaml — COLLECT NOTHING, SEND NOWHERE.
+# vm/mcp/inert.yaml — COLLECT NOTHING, SEND NOWHERE. (Every VM folder has its own copy.)
 #
-# install-otel.sh installs this instead of vm/<vm>/otel.yaml in two cases:
-#   * the host has no vm/<vm>/otel.yaml at all (mcp, today)
+# install-otel.sh (beside it) installs this instead of otel.yaml in two cases:
+#   * the folder has no otel.yaml
 #   * --inert was passed — the off switch, for taking a host out of monitoring
 #     without rebuilding its image or deleting its folder
 #

@@ -93,14 +93,14 @@ set -euo pipefail
 # the sole argument.
 readonly APP_NAME="www-apidocs"
 
-# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, at the
-# vm/ root, two levels up from this script (one copy for the whole tree).
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in common.sh, beside
+# this script — this VM folder's own copy, so the folder is self-contained.
 # This script uses only the NGINX_* ones (it downloads nothing), but sources
 # the file whole like every sibling rather than re-declaring
 # constants. Everything below is this app's own and deliberately stays here.
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../common.sh
-source "${SCRIPT_DIR}/../common.sh"
+# shellcheck source=common.sh
+source "${SCRIPT_DIR}/common.sh"
 
 # The URL prefix the docs answer on, and the doc root behind it. Kept as one
 # pair because changing either alone breaks the mapping.

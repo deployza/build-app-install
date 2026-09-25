@@ -12,13 +12,13 @@
 # sources it. A launcher that copied one script instead of cloning would
 # break — don't introduce one.
 #
-# THERE IS A SECOND COPY AT vm/common.sh, and that is deliberate: each platform
+# THERE ARE VM COPIES AT vm/<vm>/common.sh, and that is deliberate: each platform
 # folder is self-contained, the same way vm/<app>.sh and docker/<app>.sh are
 # separate copies rather than one script behind a flag (CLAUDE.md, "vm/ vs.
 # docker/"). The price is that both values below also appear there — CHANGE THE
 # BUCKET IN BOTH OR THE TWO PLATFORMS PULL FROM DIFFERENT PLACES.
 #
-# This copy is SHORTER than the VM one on purpose. vm/common.sh also carries the
+# This copy is SHORTER than the VM ones on purpose. vm/<vm>/common.sh also carries the
 # NGINX_* seams; there is no nginx in an app container (Tomcat is PID 1 and
 # serves directly), so those constants have nothing to configure here. Do not
 # add them for symmetry.
@@ -37,11 +37,11 @@
 #
 # The bucket is read by the service account the container runs as — a new
 # bucket needs an IAM grant in build-terraform before a host can pull from it.
-# KEEP IN SYNC WITH vm/common.sh.
+# KEEP IN SYNC WITH every vm/<vm>/common.sh.
 readonly GCS_BASE_URL="gs://dz-builds"
 
 # --- Local staging ------------------------------------------------------------
 # Parent of every app's staging dir; each script stages into
 # ${STAGE_ROOT}/${APP_NAME}, the sibling of the launcher's clone
-# (${STAGE_ROOT}/repo). KEEP IN SYNC WITH vm/common.sh.
+# (${STAGE_ROOT}/repo). KEEP IN SYNC WITH every vm/<vm>/common.sh.
 readonly STAGE_ROOT="/tmp/deployza"

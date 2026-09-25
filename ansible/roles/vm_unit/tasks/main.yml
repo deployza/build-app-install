@@ -8,7 +8,7 @@
 #   on the box:  sudo bash vm/ziniapps-vm/install.sh production assess-exam
 #
 #   controller:  ansible-playbook playbooks/ziniapps-vm.yml --tags otel
-#   on the box:  sudo bash vm/install-otel.sh
+#   on the box:  sudo bash vm/ziniapps-vm/install-otel.sh
 
 - name: "Refuse an empty unit"
   ansible.builtin.assert:
@@ -38,7 +38,7 @@
       ansible.builtin.command:
         cmd: >-
           {% if unit == 'otel' %}
-          bash {{ repo_dir }}/vm/install-otel.sh --vm {{ inventory_hostname }}
+          bash {{ repo_dir }}/vm/{{ inventory_hostname }}/install-otel.sh --vm {{ inventory_hostname }}
           {% else %}
           bash {{ repo_dir }}/vm/{{ inventory_hostname }}/install.sh {{ app_env }} {{ unit }}
           {% endif %}

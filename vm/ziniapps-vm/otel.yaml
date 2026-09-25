@@ -4,7 +4,7 @@
 # This is exactly what lands at /etc/otelcol/config.yaml on the host — nothing
 # assembles, templates or substitutes it. Install it with:
 #
-#   sudo bash vm/install-otel.sh                         # on the box
+#   sudo bash vm/ziniapps-vm/install-otel.sh                  # on the box
 #   ansible-playbook playbooks/ziniapps-vm.yml --tags otel   # from the controller
 #
 # install-otel.sh validates it against the host's pinned otelcol-contrib, checks
@@ -18,7 +18,8 @@
 #
 # Exactly three resource attributes reach the destination: service.name,
 # host.name, host.project. Auth is IAM — the VM's attached service account needs
-# roles/pubsub.publisher on both topics; there are no credentials in this file.
+# roles/pubsub.publisher on both topics, which live in dz-devops, not in this
+# host's project (a cross-project grant); there are no credentials in this file.
 #
 # NO extensions (no health_check), so the only signal an install worked is the
 # systemd unit staying up. Keep it thin: tail, stamp, ship — no parsing here.
@@ -196,11 +197,11 @@ exporters:
   # stamps above.
   googlecloudpubsub/logs:
     # Fully qualified, which the exporter requires — a bare topic id is
-    # rejected. THIS ASSUMES THE TOPICS LIVE IN THE INSTANCE'S OWN PROJECT
-    # (dz-ziniapps). If they are central to one project instead, change the project
-    # segment here and in the metrics topic below; host.project above is a
-    # different statement and stays as it is.
-    topic: projects/dz-ziniapps/topics/prod.vm.logs-topic
+    # rejected. THE TOPICS ARE CENTRAL, in dz-devops, shared by every host —
+    # not in this instance's own project (dz-ziniapps). Change the project segment
+    # here AND in the metrics topic below together; host.project above is a
+    # different statement (where the HOST lives) and stays as it is.
+    topic: projects/dz-devops/topics/prod.vm.logs-topic
     compression: gzip
 
     # The standard exporterhelper backoff. NOTE THE KEY: `retry_on_failure`,
@@ -222,7 +223,7 @@ exporters:
       queue_size: 1000
 
   googlecloudpubsub/metrics:
-    topic: projects/dz-ziniapps/topics/prod.vm.metrics-topic
+    topic: projects/dz-devops/topics/prod.vm.metrics-topic
     compression: gzip
 
     retry_on_failure:

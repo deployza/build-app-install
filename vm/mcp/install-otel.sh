@@ -2,14 +2,15 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# vm/install-otel.sh — install a VM's collector config: vm/<vm>/otel.yaml.
+# vm/mcp/install-otel.sh — install this folder's collector config, otel.yaml.
 #
-#   sudo bash vm/install-otel.sh [--vm NAME] [--inert]    install it
-#   bash vm/install-otel.sh --vm NAME --check              validate only, touch nothing
+#   sudo bash vm/mcp/install-otel.sh [--inert]    install it
+#   bash vm/mcp/install-otel.sh --check            validate only, touch nothing
 #
-# ONE SCRIPT FOR EVERY VM, sitting beside common.sh rather than copied into
-# each vm/<vm>/ folder: what varies per host is the config, and that is the
-# folder's otel.yaml. How to put a config on a box safely does not vary.
+# EVERY VM FOLDER HAS ITS OWN COPY, so each folder is self-contained. The
+# copies are identical today; a fix to one is a fix to all of them. THE FOLDER
+# IS THE HOST: this script installs the otel.yaml beside it, and refuses to do
+# so on a machine whose short hostname is not the folder's name.
 #
 # THE CONFIG IS NOT ASSEMBLED. Each vm/<vm>/otel.yaml is the complete file —
 # receivers, processors, exporters, service — and is installed verbatim. This
@@ -34,9 +35,9 @@ set -euo pipefail
 #      returns before otelcol parses its config, so a bad config dies a second
 #      or two after "success". If it did not hold, restore the backup.
 #
-# A HOST WITH NO vm/<vm>/otel.yaml GETS inert.yaml — collect nothing, send
-# nowhere — through the same path. `mcp` is that host today. --inert forces it
-# for a host that does have a config (the off switch).
+# --inert installs the inert.yaml beside this script instead — collect nothing,
+# send nowhere — through the same path (the off switch). So does a folder with
+# no otel.yaml.
 #
 # NO SECRETS PASS THROUGH HERE. Pub/Sub authenticates with the VM's attached
 # service account, so the config is safe at 0640 root:otelcol.
@@ -77,11 +78,13 @@ while [[ $# -gt 0 ]]; do
     *) die "unknown argument: $1 (usage: $0 [--vm NAME] [--inert] [--check])" ;;
   esac
 done
-# The short hostname IS the GCE instance name, the vm/<vm>/ folder name and the
-# Ansible inventory key. --vm exists for checking another host's config from a
-# workstation clone; Ansible passes it anyway, to say which host it thinks it is
-# talking to.
-VM="${VM:-$(hostname -s)}"
+# THE FOLDER NAME IS THE HOST: the GCE instance name, the short hostname and the
+# Ansible inventory key. --vm is Ansible saying which host it thinks it is
+# talking to; it must agree with the folder this script sits in.
+readonly FOLDER_VM="$(basename "$SCRIPT_DIR")"
+[[ -z "$VM" || "$VM" == "$FOLDER_VM" ]] \
+  || die "this is vm/${FOLDER_VM}/install-otel.sh, not ${VM}'s — run vm/${VM}/install-otel.sh"
+VM="$FOLDER_VM"
 
 # ---------------------------------------------------------------------------
 
@@ -89,8 +92,8 @@ pick_config() {
   if [[ "$FORCE_INERT" == true ]]; then
     log "using INERT on request (--inert)" >&2
     echo "${SCRIPT_DIR}/inert.yaml"
-  elif [[ -f "${SCRIPT_DIR}/${VM}/otel.yaml" ]]; then
-    echo "${SCRIPT_DIR}/${VM}/otel.yaml"
+  elif [[ -f "${SCRIPT_DIR}/otel.yaml" ]]; then
+    echo "${SCRIPT_DIR}/otel.yaml"
   else
     log "no vm/${VM}/otel.yaml — using INERT (collect nothing, send nowhere)" >&2
     echo "${SCRIPT_DIR}/inert.yaml"
@@ -157,7 +160,7 @@ apply() {
   log "backed up the live config to ${OTEL_BACKUP}"
 
   install -o root -g otelcol -m 640 "$config" "$OTEL_CONF"
-  log "installed ${config#"${SCRIPT_DIR}/"} as ${OTEL_CONF}"
+  log "installed vm/${VM}/${config##*/} as ${OTEL_CONF}"
 
   systemctl restart "$OTEL_SERVICE"
   log "restarted ${OTEL_SERVICE}; waiting ${SETTLE_SECONDS}s to see whether it holds"
@@ -182,7 +185,7 @@ main() {
 
   echo
   echo "==============================================================="
-  echo "  otel: ${VM} <- ${config#"${SCRIPT_DIR}/"}$([[ "$CHECK_ONLY" == true ]] && echo ' (check only)')"
+  echo "  otel: ${VM} <- vm/${VM}/${config##*/}$([[ "$CHECK_ONLY" == true ]] && echo ' (check only)')"
   echo "==============================================================="
 
   if [[ "$CHECK_ONLY" == true ]]; then
@@ -193,6 +196,12 @@ main() {
   fi
 
   [[ "$(id -u)" -eq 0 ]] || die "must run as root (use sudo)"
+  # When the hostname chose the config, a wrong host could only ever get
+  # inert.yaml. Now the folder decides, so a script run from the wrong folder
+  # would install another host's pipelines here — refuse that. (--check, above,
+  # stays usable from a workstation.)
+  [[ "$(hostname -s)" == "$VM" ]] \
+    || die "this host is '$(hostname -s)', but this is vm/${VM}/ — run vm/$(hostname -s)/install-otel.sh"
   [[ -f "$OTEL_CONF" ]] || die "no ${OTEL_CONF} — this image has no collector (install-otel.sh did not run at bake)"
 
   check_project "$config"

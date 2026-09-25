@@ -96,10 +96,10 @@ set -euo pipefail
 readonly APP_NAME="ziniapps-www"
 
 # --- Shared estate constants --------------------------------------------------
-# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, at the
-# vm/ root, two levels up from this script (one copy for the whole tree),
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in common.sh, beside
+# this script — this VM folder's own copy, so the folder is self-contained,
 # so that changing the artifact bucket (or any path the images bake) is one
-# edit for every VM app instead of one per app. docker/ keeps its
+# edit per VM folder instead of one per app. docker/ keeps its
 # OWN common.sh — the two platform folders are self-contained, so a bucket
 # change is two edits, one per folder. common.sh documents what belongs there
 # and what deliberately stays here (anything per-app).
@@ -110,8 +110,8 @@ readonly APP_NAME="ziniapps-www"
 # BY VALUE with ziniapps-go.sh: whichever runs first patches nginx.conf and the
 # other finds the marker and skips, so the two must stay in sync.
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../common.sh
-source "${SCRIPT_DIR}/../common.sh"
+# shellcheck source=common.sh
+source "${SCRIPT_DIR}/common.sh"
 
 # The per-HOST routing seam. Created by these scripts, not by the image. One file
 # per site: <site>.conf, each holding a complete server{} block, included from

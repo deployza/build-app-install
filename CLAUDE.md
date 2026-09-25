@@ -37,14 +37,15 @@ One script per app **per platform**:
 ```
 build-app-install/
 ├── vm/                    # organised by HOST — one folder per VM
-│   ├── common.sh          # constants, sourced as ../common.sh from vm/<vm>/
-│   ├── units.sh           # the runner every vm/<vm>/install.sh sources
-│   ├── install-otel.sh    # the `otel` unit: validate, swap, restart, verify, roll back
-│   ├── inert.yaml         # collect nothing — hosts with no otel.yaml, and --inert
-│   └── <vm>/              # ziniapps-vm/, deployza-vm/
+│   ├── mcp/               # collects nothing: install-otel.sh + inert.yaml only
+│   └── <vm>/              # ziniapps-vm/, deployza-vm/ — SELF-CONTAINED, nothing shared
 │       ├── install.sh     #   UNITS, in order; run all or any: install.sh <env> [unit...]
 │       ├── <app>.sh       #   one unit per app this host runs
-│       └── otel.yaml      #   this host's COMPLETE collector config
+│       ├── otel.yaml      #   this host's COMPLETE collector config
+│       ├── install-otel.sh #  the `otel` unit: validate, swap, restart, verify, roll back
+│       ├── inert.yaml     #   collect nothing — --inert
+│       ├── units.sh       #   the runner install.sh sources
+│       └── common.sh      #   constants, sourced as common.sh by every <app>.sh
 ├── docker/
 │   ├── common.sh          # constants SOURCED by every docker/ script
 │   └── <APP_NAME>.sh      # deploy into the PID-1 Tomcat of a container
@@ -57,7 +58,7 @@ build-app-install/
 Either way the scripts land at `/tmp/deployza/repo`. A container runs
 `docker/<APP_NAME>.sh <APP_ENV>`; a VM runs `vm/<vm>/install.sh <APP_ENV>
 [unit ...]`, or a unit directly (`vm/<vm>/<app>.sh <APP_ENV>`,
-`vm/install-otel.sh`). `APP_ENV` (`development` / `production`) is the sole
+`vm/<vm>/install-otel.sh`). `APP_ENV` (`development` / `production`) is the sole
 argument wherever an app is being deployed.
 
 ## A VM is a folder of units
@@ -69,7 +70,7 @@ its own folder, and each piece of work is a **unit**:
 | unit | script | what it does |
 |---|---|---|
 | `<app>` | `vm/<vm>/<app>.sh <APP_ENV>` | install one app |
-| `otel` | `vm/install-otel.sh [--vm NAME] [--inert] [--check]` | install `vm/<vm>/otel.yaml` |
+| `otel` | `vm/<vm>/install-otel.sh [--inert] [--check]` | install `vm/<vm>/otel.yaml` |
 
 `vm/<vm>/install.sh` holds the host's ordered `UNITS` (apps, then `otel`) and
 runs all of them, `apps` (every unit but otel), or the units you name:
@@ -78,8 +79,8 @@ runs all of them, `apps` (every unit but otel), or the units you name:
 sudo bash vm/ziniapps-vm/install.sh production                 # every unit
 sudo bash vm/ziniapps-vm/install.sh production assess-exam     # one
 sudo bash vm/ziniapps-vm/install.sh production apps            # all apps
-sudo bash vm/install-otel.sh                                   # otel only
-bash vm/install-otel.sh --vm ziniapps-vm --check               # validate, touch nothing
+sudo bash vm/ziniapps-vm/install-otel.sh                       # otel only
+bash vm/ziniapps-vm/install-otel.sh --check                    # validate, touch nothing
 ```
 
 A unit named explicitly need not be in `UNITS`: that is how `hundi-ui` — present
@@ -120,8 +121,13 @@ no placeholders and no render step.
   and a missing one is the number one silent failure); back up, swap, **restart
   never reload**, wait `SETTLE_SECONDS` and confirm the unit stayed up; restore
   the backup if not.
-- **A host with no `vm/<vm>/otel.yaml` gets `vm/inert.yaml`** — `mcp` today.
-  `--inert` forces it (the off switch).
+- **The folder is the host.** `vm/<vm>/install-otel.sh` installs the
+  `otel.yaml` beside it and refuses a real install where `hostname -s` is not
+  the folder name (`--check` works anywhere). `--inert` installs the folder's
+  `inert.yaml` instead (the off switch).
+- **Every host has a folder**, even one that collects nothing: `vm/mcp/` holds
+  only `install-otel.sh` and `inert.yaml`, which it installs because there is
+  no `otel.yaml`. `vm_push` refuses a host with no folder.
 - **There is no `docker/` counterpart, deliberately.** Containers log to stdout
   and the runtime collects it.
 
@@ -142,8 +148,8 @@ so a VM with nothing pushed to it collects nothing and sends nowhere.
 >
 > **Deploying by hand, meanwhile:** clone this repo on the instance and run
 > `sudo bash vm/<vm>/install.sh <APP_ENV> [unit ...]`. Copying a loose script
-> breaks at the `source` line — `common.sh` must sit one level above it — so
-> bring the tree, not the file.
+> breaks at the `source` line — `common.sh` must sit beside it — so
+> bring the folder, not the file.
 
 ## `ansible/` is not a third platform
 
@@ -226,10 +232,8 @@ runtimes differ; do **not** merge them behind a platform flag.
 
 ## `common.sh` — one per platform folder
 
-Each of `vm/` and `docker/` has **its own** `common.sh` — `vm/common.sh` sits at
-the `vm/` root and is sourced as `../common.sh` from inside `vm/<vm>/`,
-`docker/common.sh` sits beside its flat scripts — sourced by every deploy
-script in that folder from its own directory:
+Every `vm/<vm>/` folder and `docker/` has **its own** `common.sh`, sitting
+beside the scripts that source it from their own directory:
 
 ```bash
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -240,19 +244,20 @@ It holds the values identical for **every app on that platform** and owned by
 the infrastructure, so changing one is a single edit per folder rather than one
 per app:
 
-| | `vm/common.sh` | `docker/common.sh` |
+| | `vm/<vm>/common.sh` | `docker/common.sh` |
 | --- | --- | --- |
 | Artifact bucket | `GCS_BASE_URL` | `GCS_BASE_URL` |
 | Staging parent | `STAGE_ROOT` | `STAGE_ROOT` |
 | nginx seams | `NGINX_APP_D`, `NGINX_SITE_D`, `NGINX_CONF_MAIN`, `INCLUDE_MARKER`, `NGINX_SERVICE`, `NGINX_USER`, `NGINX_GROUP` | **none** — Tomcat is PID 1 and serves directly; there is no nginx in an app container |
 
-**Two copies is the deliberate choice**, keeping each platform folder
-self-contained for the same reason `vm/<vm>/<app>.sh` and
-`docker/<app>.sh` are
-separate copies (next section). **The price: `GCS_BASE_URL` and `STAGE_ROOT`
-appear in both files — change the bucket in BOTH, or the two platforms pull
-from different places.** Do not "fix" this by having one folder source the
-other's copy.
+**One copy per folder is the deliberate choice**, keeping each VM folder and
+`docker/` self-contained for the same reason `vm/<vm>/<app>.sh` and
+`docker/<app>.sh` are separate copies (next section). **The price:
+`GCS_BASE_URL` and `STAGE_ROOT` appear in every copy — change the bucket in
+EVERY `vm/<vm>/common.sh` AND `docker/common.sh`, or hosts pull from different
+places.** Do not "fix" this by having one folder source another's copy. The
+same goes for `units.sh` and `install-otel.sh`: identical per-folder copies, so
+a fix to one is a fix to all.
 
 **What must NOT move into either file:** anything per-app — `APP_NAME`, the
 context path, `DEFAULT_WEB_ROOT` (`/var/www/app` for per-PATH apps,
@@ -261,12 +266,12 @@ context path, `DEFAULT_WEB_ROOT` (`/var/www/app` for per-PATH apps,
 
 Both files are sourced, never executed — no shebang, no `set -e`, never a unit.
 Their values are `readonly`, which is safe because each unit is its own `bash`
-process (`vm/units.sh` runs each via `bash <script>`), so each is sourced exactly
+process (`vm/<vm>/units.sh` runs each via `bash <script>`), so each is sourced exactly
 once per process. `install.sh` sources neither.
 
-**This depends on `vm/common.sh` reaching the host with the VM folder.** A push
+**This depends on `common.sh` reaching the host with the VM folder.** A push
 that copied a single script would break at the `source` line — `vm_push` ships
-the folder plus the shared `vm/` files, not the file.
+the whole folder, not the file.
 
 ## Conventions
 
@@ -298,7 +303,7 @@ the folder plus the shared `vm/` files, not the file.
    per-HOST static site. Keep the vm/docker differences above.
 2. Fix `APP_NAME` in each to the new name (it is hardcoded — the script *is* that
    app's installer; the unit is resolved by filename). Keep the `source` line
-   (`../common.sh` on a VM, `common.sh` in docker/) — do not re-declare `GCS_BASE_URL`,
+   (`common.sh`, beside the script, on both platforms) — do not re-declare `GCS_BASE_URL`,
    `STAGE_ROOT` or the `NGINX_*` constants locally.
 3. Ensure the app's `conf/` (incl. `install.properties`) + WAR are published to
    `gs://dz-builds/<env>/<app>/`.
