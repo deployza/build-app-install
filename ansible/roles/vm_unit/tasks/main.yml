@@ -38,9 +38,9 @@
       ansible.builtin.command:
         cmd: >-
           {% if unit == 'otel' %}
-          bash {{ repo_dir }}/vm/{{ inventory_hostname }}/install-otel.sh --vm {{ inventory_hostname }}
+          bash {{ repo_dir }}/vm/{{ vm_dir | default(inventory_hostname) }}/install-otel.sh --vm {{ inventory_hostname }}
           {% else %}
-          bash {{ repo_dir }}/vm/{{ inventory_hostname }}/install.sh {{ app_env }} {{ unit }}
+          bash {{ repo_dir }}/vm/{{ vm_dir | default(inventory_hostname) }}/install.sh {{ app_env }} {{ unit }}
           {% endif %}
       register: _unit_run
       changed_when: true

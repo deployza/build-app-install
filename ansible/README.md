@@ -55,8 +55,9 @@ sudo bash vm/ziniapps-vm/install-otel.sh                     # otel
   on the box. It ships the host's whole `vm/<vm>/` folder and nothing else —
   the folder is self-contained (its own `common.sh`, `units.sh`,
   `install-otel.sh` and `inert.yaml`) and holds only what that host runs, so
-  nothing needs pruning. Every host has a folder — `vm/mcp/` holds only
-  `install-otel.sh` and `inert.yaml` — and a host without one is refused. `/tmp/deployza/repo` is wiped
+  nothing needs pruning. Every host has a folder — `vm/mcp-vm/` holds only
+  `install-otel.sh`, `inert.yaml` and `instance` (the folder is host `mcp`, set by
+  its `vm_dir`) — and a host without one is refused. `/tmp/deployza/repo` is wiped
   first, so a removed unit cannot linger and still be runnable.
 - **The unit order is written twice**: in the playbook's role list and in
   `vm/<vm>/install.sh`'s `UNITS`. Tags must be static, so the playbook cannot read

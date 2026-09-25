@@ -1,5 +1,5 @@
 ---
-# The repo root (build-app-install/), two levels above playbooks/. The playbooks
+# The repo root (build-ops/), two levels above playbooks/. The playbooks
 # and the scripts they push are one checkout and one commit.
 app_src_root: "{{ playbook_dir }}/../.."
 

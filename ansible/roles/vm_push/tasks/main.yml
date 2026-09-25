@@ -8,13 +8,14 @@
 # THE PAYLOAD IS THE HOST'S WHOLE FOLDER, NOT A PRUNED LIST: vm/<vm>/ holds only
 # what that host runs — its own common.sh, units.sh, install-otel.sh and
 # inert.yaml included — so there is nothing to prune and nothing to add. The
-# folder name IS the inventory key IS the GCE instance name, and EVERY HOST HAS
-# ONE: a host that collects nothing (mcp) has a folder holding only
-# install-otel.sh and inert.yaml. No folder is a refusal, not a fallback.
+# folder name IS the inventory key IS the GCE instance name unless the host sets
+# `vm_dir` (mcp's folder is vm/mcp-vm/), and EVERY HOST HAS ONE: a host that
+# collects nothing (mcp) has a folder holding only install-otel.sh, inert.yaml
+# and its `instance` file. No folder is a refusal, not a fallback.
 
 - name: Look for this host's vm/ folder
   ansible.builtin.stat:
-    path: "{{ app_src_root }}/vm/{{ inventory_hostname }}"
+    path: "{{ app_src_root }}/vm/{{ vm_dir | default(inventory_hostname) }}"
   delegate_to: localhost
   become: false
   register: _vm_dir
@@ -23,14 +24,14 @@
   ansible.builtin.assert:
     that: _vm_dir.stat.isdir | default(false)
     fail_msg: >-
-      There is no vm/{{ inventory_hostname }}/ folder. Every host needs one —
-      even a host that collects nothing gets install-otel.sh and inert.yaml
-      there (see vm/mcp/).
+      There is no vm/{{ vm_dir | default(inventory_hostname) }}/ folder. Every
+      host needs one — even a host that collects nothing gets install-otel.sh
+      and inert.yaml there (see vm/mcp-vm/).
     quiet: true
 
 - name: Assemble the file list
   ansible.builtin.set_fact:
-    _payload: "{{ ['vm/' ~ inventory_hostname] }}"
+    _payload: "{{ ['vm/' ~ (vm_dir | default(inventory_hostname))] }}"
 
 - name: Shipping
   ansible.builtin.debug:

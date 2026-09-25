@@ -14,7 +14,7 @@ Guidance for Claude Code when working in this repository.
 > **If that path does not exist, you have not cloned `build-docs` yet — stop and
 > clone it first** (it sits next to this repo under `Build/`):
 > ```bash
-> git clone https://github.com/deployza/build-app-install.git
+> git clone https://github.com/deployza/build-ops.git
 > ```
 > Without it you are missing the cross-repo context (how this repo fits the
 > image / GCS-artifact / push flow).
@@ -35,7 +35,7 @@ that asymmetry is permanent** (see the `vm/` vs `docker/` box below):
 One script per app **per platform**:
 
 ```
-build-app-install/
+build-ops/
 ├── vm/                    # organised by HOST — one folder per VM
 │   ├── mcp/               # collects nothing: install-otel.sh + inert.yaml only
 │   └── <vm>/              # ziniapps-vm/, deployza-vm/ — SELF-CONTAINED, nothing shared
@@ -123,11 +123,13 @@ no placeholders and no render step.
   the backup if not.
 - **The folder is the host.** `vm/<vm>/install-otel.sh` installs the
   `otel.yaml` beside it and refuses a real install where `hostname -s` is not
-  the folder name (`--check` works anywhere). `--inert` installs the folder's
-  `inert.yaml` instead (the off switch).
-- **Every host has a folder**, even one that collects nothing: `vm/mcp/` holds
-  only `install-otel.sh` and `inert.yaml`, which it installs because there is
-  no `otel.yaml`. `vm_push` refuses a host with no folder.
+  the folder's host (`--check` works anywhere). The host is the folder name,
+  unless an `instance` file in the folder names it (`vm/mcp-vm/` is host `mcp`;
+  its inventory entry sets `vm_dir: mcp-vm` to match). `--inert` installs the
+  folder's `inert.yaml` instead (the off switch).
+- **Every host has a folder**, even one that collects nothing: `vm/mcp-vm/` holds
+  only `install-otel.sh`, `inert.yaml` and `instance`, and installs `inert.yaml`
+  because there is no `otel.yaml`. `vm_push` refuses a host with no folder.
 - **There is no `docker/` counterpart, deliberately.** Containers log to stdout
   and the runtime collects it.
 

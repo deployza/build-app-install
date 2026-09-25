@@ -10,7 +10,9 @@ set -euo pipefail
 # EVERY VM FOLDER HAS ITS OWN COPY, so each folder is self-contained. The
 # copies are identical today; a fix to one is a fix to all of them. THE FOLDER
 # IS THE HOST: this script installs the otel.yaml beside it, and refuses to do
-# so on a machine whose short hostname is not the folder's name.
+# so on a machine whose short hostname is not the folder's host: the folder
+# name, or the name in an `instance` file beside this script when the two
+# differ (vm/mcp-vm/ is host `mcp`).
 #
 # THE CONFIG IS NOT ASSEMBLED. Each vm/<vm>/otel.yaml is the complete file —
 # receivers, processors, exporters, service — and is installed verbatim. This
@@ -78,12 +80,21 @@ while [[ $# -gt 0 ]]; do
     *) die "unknown argument: $1 (usage: $0 [--vm NAME] [--inert] [--check])" ;;
   esac
 done
-# THE FOLDER NAME IS THE HOST: the GCE instance name, the short hostname and the
-# Ansible inventory key. --vm is Ansible saying which host it thinks it is
-# talking to; it must agree with the folder this script sits in.
-readonly FOLDER_VM="$(basename "$SCRIPT_DIR")"
+# THE FOLDER IS THE HOST: its host name — the GCE instance name, the short
+# hostname and the Ansible inventory key — is the folder name, or the contents
+# of an `instance` file in the folder when they differ. --vm is Ansible saying
+# which host it thinks it is talking to; it must agree with the folder this
+# script sits in.
+readonly FOLDER="$(basename "$SCRIPT_DIR")"
+if [[ -f "${SCRIPT_DIR}/instance" ]]; then
+  FOLDER_VM="$(tr -d '[:space:]' < "${SCRIPT_DIR}/instance")"
+  [[ -n "$FOLDER_VM" ]] || die "vm/${FOLDER}/instance is empty"
+else
+  FOLDER_VM="$FOLDER"
+fi
+readonly FOLDER_VM
 [[ -z "$VM" || "$VM" == "$FOLDER_VM" ]] \
-  || die "this is vm/${FOLDER_VM}/install-otel.sh, not ${VM}'s — run vm/${VM}/install-otel.sh"
+  || die "vm/${FOLDER}/ is host ${FOLDER_VM}'s, not ${VM}'s — run ${VM}'s folder's install-otel.sh"
 VM="$FOLDER_VM"
 
 # ---------------------------------------------------------------------------
@@ -95,7 +106,7 @@ pick_config() {
   elif [[ -f "${SCRIPT_DIR}/otel.yaml" ]]; then
     echo "${SCRIPT_DIR}/otel.yaml"
   else
-    log "no vm/${VM}/otel.yaml — using INERT (collect nothing, send nowhere)" >&2
+    log "no vm/${FOLDER}/otel.yaml — using INERT (collect nothing, send nowhere)" >&2
     echo "${SCRIPT_DIR}/inert.yaml"
   fi
 }
@@ -160,7 +171,7 @@ apply() {
   log "backed up the live config to ${OTEL_BACKUP}"
 
   install -o root -g otelcol -m 640 "$config" "$OTEL_CONF"
-  log "installed vm/${VM}/${config##*/} as ${OTEL_CONF}"
+  log "installed vm/${FOLDER}/${config##*/} as ${OTEL_CONF}"
 
   systemctl restart "$OTEL_SERVICE"
   log "restarted ${OTEL_SERVICE}; waiting ${SETTLE_SECONDS}s to see whether it holds"
@@ -185,7 +196,7 @@ main() {
 
   echo
   echo "==============================================================="
-  echo "  otel: ${VM} <- vm/${VM}/${config##*/}$([[ "$CHECK_ONLY" == true ]] && echo ' (check only)')"
+  echo "  otel: ${VM} <- vm/${FOLDER}/${config##*/}$([[ "$CHECK_ONLY" == true ]] && echo ' (check only)')"
   echo "==============================================================="
 
   if [[ "$CHECK_ONLY" == true ]]; then
@@ -201,7 +212,7 @@ main() {
   # would install another host's pipelines here — refuse that. (--check, above,
   # stays usable from a workstation.)
   [[ "$(hostname -s)" == "$VM" ]] \
-    || die "this host is '$(hostname -s)', but this is vm/${VM}/ — run vm/$(hostname -s)/install-otel.sh"
+    || die "this host is '$(hostname -s)', but vm/${FOLDER}/ is host ${VM}'s — run this host's folder's install-otel.sh"
   [[ -f "$OTEL_CONF" ]] || die "no ${OTEL_CONF} — this image has no collector (install-otel.sh did not run at bake)"
 
   check_project "$config"

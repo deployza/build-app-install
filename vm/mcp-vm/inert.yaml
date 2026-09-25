@@ -1,4 +1,4 @@
-# vm/mcp/inert.yaml — COLLECT NOTHING, SEND NOWHERE. (Every VM folder has its own copy.)
+# vm/mcp-vm/inert.yaml — COLLECT NOTHING, SEND NOWHERE. (Every VM folder has its own copy.)
 #
 # install-otel.sh (beside it) installs this instead of otel.yaml in two cases:
 #   * the folder has no otel.yaml
