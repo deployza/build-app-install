@@ -68,7 +68,7 @@ set -euo pipefail
 # Requires the `nginx` image (build-vm-images/images/ubuntu/nginx/) — or any
 # image whose install-nginx-static.sh (or install-nginx.sh) has run. Unlike
 # ziniapps-www.sh, this app has no Tomcat dependency at all, so it targets the
-# Tomcat-free `nginx` flavor rather than tomcat-nginx-mysql.
+# Tomcat-free `nginx` flavor rather than tomcat-mysql-nginx.
 #
 # GCS layout (${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/):
 #   install/                       the whole config folder, copied verbatim:
@@ -447,7 +447,7 @@ EOF
 # ensure_app_d: create the per-PATH drop-in dir this site's server block
 # includes.
 #
-# On the tomcat-nginx-mysql image the dir is baked (install-nginx.sh) and the
+# On the tomcat-mysql-nginx image the dir is baked (install-nginx.sh) and the
 # per-path scripts merely write into it. The Tomcat-free `nginx` flavor this
 # host runs ships NO app routing at all (install-nginx-static.sh), so here it
 # may legitimately not exist — and nginx treats a missing include PATH as a hard

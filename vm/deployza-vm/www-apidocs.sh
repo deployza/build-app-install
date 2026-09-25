@@ -210,7 +210,7 @@ require_tools() {
 
 # ensure_app_d: create the per-PATH drop-in dir if it is missing.
 #
-# On the tomcat-nginx-mysql image this dir is baked (install-nginx.sh) and the
+# On the tomcat-mysql-nginx image this dir is baked (install-nginx.sh) and the
 # per-path scripts merely write into it. The Tomcat-free `nginx` flavor this app
 # targets ships NO app routing at all (install-nginx-static.sh), so on this host
 # the dir may legitimately not exist yet — and nothing else on the VM creates

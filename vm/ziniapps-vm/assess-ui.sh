@@ -22,7 +22,7 @@ set -euo pipefail
 # APP_NAME is fixed to "assess-ui" here (this IS that script); the single
 # argument is APP_ENV ("$1").
 #
-# Requires the tomcat-nginx-mysql image (or any image whose install-nginx.sh has
+# Requires the tomcat-mysql-nginx image (or any image whose install-nginx.sh has
 # run): this script writes into /etc/nginx/app.d/, the routing seam that image
 # bakes EMPTY on purpose. See build-vm-images/scripts/ubuntu/install-nginx.sh
 # and /etc/nginx/app.d/README on the VM itself.
@@ -38,7 +38,7 @@ set -euo pipefail
 #   install.app.context.path     URL path and dir name -> ${WEB_ROOT}/<ctx>, /<ctx>
 #   install.web.root             OPTIONAL. nginx static root holding the per-app
 #                                dirs; defaults to /var/www/app, the dir the
-#                                tomcat-nginx-mysql image bakes for this. Set it
+#                                tomcat-mysql-nginx image bakes for this. Set it
 #                                only to serve from somewhere the image does not
 #                                prepare — see DEFAULT_WEB_ROOT below.
 #
@@ -100,7 +100,7 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "${SCRIPT_DIR}/common.sh"
 
-# Fallback for install.web.root — the static root the tomcat-nginx-mysql image
+# Fallback for install.web.root — the static root the tomcat-mysql-nginx image
 # bakes (empty, www-data-owned) for exactly this purpose. It is the PARENT that
 # holds the per-app dirs, not one app's dir: this script installs into
 # ${WEB_ROOT}/<ctx>, so both apps share the root and differ by context path.
@@ -202,7 +202,7 @@ require_tools() {
 
   if (( ${#missing[@]} > 0 )); then
     echo "ERROR: required command(s) not found: ${missing[*]}" >&2
-    echo "  This script targets the tomcat-nginx-mysql image (nginx + unzip present)." >&2
+    echo "  This script targets the tomcat-mysql-nginx image (nginx + unzip present)." >&2
     exit 1
   fi
 

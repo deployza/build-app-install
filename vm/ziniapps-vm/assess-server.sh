@@ -11,7 +11,7 @@ set -euo pipefail
 # already-running Tomcat, then writes the nginx routing drop-in that proxies
 # /<ctx>/ to Tomcat and reloads nginx.
 #
-# On the tomcat-nginx-mysql image nginx owns :80 and Tomcat is only reachable on
+# On the tomcat-mysql-nginx image nginx owns :80 and Tomcat is only reachable on
 # 127.0.0.1:8080. That image bakes /etc/nginx/app.d/ EMPTY on purpose — every
 # path except /nginx-health 404s until an app deploy script drops its own
 # location blocks in. Deploying the WAR alone therefore yields a working

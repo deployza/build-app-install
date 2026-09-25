@@ -45,7 +45,7 @@ set -euo pipefail
 # APP_NAME is fixed to "ziniapps-www" here (this IS that script); the single
 # argument is APP_ENV ("$1").
 #
-# Requires the tomcat-nginx-mysql image (or any image whose install-nginx.sh has
+# Requires the tomcat-mysql-nginx image (or any image whose install-nginx.sh has
 # run).
 #
 # GCS layout (${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/):
@@ -204,7 +204,7 @@ require_tools() {
 
   if (( ${#missing[@]} > 0 )); then
     echo "ERROR: required command(s) not found: ${missing[*]}" >&2
-    echo "  This script targets the tomcat-nginx-mysql image (nginx + unzip present)." >&2
+    echo "  This script targets the tomcat-mysql-nginx image (nginx + unzip present)." >&2
     exit 1
   fi
 
