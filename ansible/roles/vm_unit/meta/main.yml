@@ -1,0 +1,7 @@
+---
+# ONE ROLE, LISTED ONCE PER UNIT. Ansible refuses to run the same role twice in
+# a play unless this is set, and each VM's playbook lists vm_unit once per unit
+# with a different `unit` and a matching tag.
+allow_duplicates: true
+
+dependencies: []

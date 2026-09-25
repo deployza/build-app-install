@@ -1,0 +1,96 @@
+---
+# vm_push — put this host's part of vm/ on the host, once per run.
+#
+# LISTED FIRST IN EVERY VM PLAYBOOK AND TAGGED `always`, so whichever units
+# --tags selects, the scripts they run are there. The units themselves
+# (vm_unit) only invoke.
+#
+# THE PAYLOAD IS THE HOST'S WHOLE FOLDER, NOT A PRUNED LIST: vm/<vm>/ holds only
+# what that host runs, so there is nothing to prune. Plus the four shared files
+# every folder needs (vm_push_shared). The folder name IS the inventory key IS
+# the GCE instance name; a host with no folder (mcp) gets only the shared files,
+# and install-otel.sh then installs inert.yaml.
+
+- name: Look for this host's vm/ folder
+  ansible.builtin.stat:
+    path: "{{ app_src_root }}/vm/{{ inventory_hostname }}"
+  delegate_to: localhost
+  become: false
+  register: _vm_dir
+
+- name: Assemble the file list
+  ansible.builtin.set_fact:
+    _payload: >-
+      {{ vm_push_shared
+         + (['vm/' ~ inventory_hostname] if _vm_dir.stat.isdir | default(false) else []) }}
+
+- name: Shipping
+  ansible.builtin.debug:
+    var: _payload
+
+- name: Make a staging dir on the controller
+  ansible.builtin.tempfile:
+    state: directory
+    suffix: "-{{ inventory_hostname }}-payload"
+  delegate_to: localhost
+  become: false
+  changed_when: false
+  register: _payload_dir
+
+- name: Pack, ship and unpack
+  block:
+    - name: Pack it
+      # Paths are relative to app_src_root so the tree unpacks as vm/..., which
+      # is what the scripts' `../common.sh` and `../install-otel.sh` assume.
+      ansible.builtin.shell:
+        cmd: >-
+          tar czf '{{ _payload_dir.path }}/payload.tar.gz'
+          -C '{{ app_src_root }}' {{ _payload | map('quote') | join(' ') }}
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: Hash what is being shipped
+      # The record that the bytes that ran are the bytes you had.
+      ansible.builtin.stat:
+        path: "{{ _payload_dir.path }}/payload.tar.gz"
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      become: false
+      register: _payload_stat
+
+    - name: Report the payload hash
+      ansible.builtin.debug:
+        msg: "payload sha256={{ _payload_stat.stat.checksum }} ({{ _payload_stat.stat.size }} bytes)"
+
+    - name: Clear the previous push
+      # A script left by an earlier push (a renamed or removed unit) would
+      # otherwise still be sitting here and still be runnable. Only repo/ is
+      # removed: the app staging dirs beside it belong to the app scripts.
+      ansible.builtin.file:
+        path: "{{ repo_dir }}"
+        state: absent
+
+    - name: Create the deploy root
+      ansible.builtin.file:
+        path: "{{ repo_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Unpack the payload
+      ansible.builtin.unarchive:
+        src: "{{ _payload_dir.path }}/payload.tar.gz"
+        dest: "{{ repo_dir }}"
+        owner: root
+        group: root
+
+  always:
+    - name: Remove the controller staging dir
+      ansible.builtin.file:
+        path: "{{ _payload_dir.path }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      changed_when: false

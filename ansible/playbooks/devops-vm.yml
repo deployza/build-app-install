@@ -1,0 +1,15 @@
+---
+# devops-vm — the ops platform in dz-devops (ops-infra.md Part A).
+#
+# NO UNITS, and that is a statement rather than an omission. This host is the
+# controller in the end state, so it is `ansible_connection: local` — it does
+# not tunnel to itself. ClickHouse, Grafana and Semaphore are configured by a
+# different push shape, which this repo does not own.
+#
+# Neither the instance nor its image exists yet. When it does and it needs a
+# collector, give it vm/devops-vm/otel.yaml and add the same two lines mcp-vm.yml
+# has: vm_push, then vm_unit otel.
+- name: devops-vm
+  hosts: devops-vm
+  become: true
+  roles: []

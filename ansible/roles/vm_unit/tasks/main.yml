@@ -1,0 +1,53 @@
+---
+# vm_unit — run ONE unit on the host, from the tree vm_push put there.
+#
+# THE ROLE DECIDES NOTHING. It invokes the same script a person on the box
+# would, so the two entry points are one implementation:
+#
+#   controller:  ansible-playbook playbooks/ziniapps-vm.yml --tags assess-exam
+#   on the box:  sudo bash vm/ziniapps-vm/install.sh production assess-exam
+#
+#   controller:  ansible-playbook playbooks/ziniapps-vm.yml --tags otel
+#   on the box:  sudo bash vm/install-otel.sh
+
+- name: "Refuse an empty unit"
+  ansible.builtin.assert:
+    that: unit | length > 0
+    fail_msg: "vm_unit needs `unit:` — e.g. { role: vm_unit, unit: otel, tags: [otel] }"
+    quiet: true
+
+- name: "{{ unit }}: refuse to deploy without an environment"
+  # Every unit but otel deploys an app, and there is no default anywhere in this
+  # path, deliberately — a missing value must abort, not deploy to the wrong
+  # environment.
+  ansible.builtin.assert:
+    that:
+      - app_env is defined
+      - app_env in ['development', 'production']
+    fail_msg: >-
+      {{ inventory_hostname }} defines no usable app_env. Set it in inventory or
+      pass -e app_env=production.
+    quiet: true
+  when: unit != 'otel'
+
+- name: "Unit: {{ unit }}"
+  block:
+    - name: "Run {{ unit }}"
+      # changed_when: true — these scripts redeploy every run and do not report
+      # whether anything differed, so anything else would be a guess.
+      ansible.builtin.command:
+        cmd: >-
+          {% if unit == 'otel' %}
+          bash {{ repo_dir }}/vm/install-otel.sh --vm {{ inventory_hostname }}
+          {% else %}
+          bash {{ repo_dir }}/vm/{{ inventory_hostname }}/install.sh {{ app_env }} {{ unit }}
+          {% endif %}
+      register: _unit_run
+      changed_when: true
+
+  always:
+    - name: "{{ unit }} output"
+      # On both paths: the script's echo IS the log of what happened.
+      ansible.builtin.debug:
+        var: _unit_run.stdout_lines
+      when: _unit_run.stdout_lines is defined

@@ -1,0 +1,18 @@
+---
+# mcp-vm — the MCP server in dz-builds, inventory host `mcp`.
+#
+# ONE UNIT: otel. There is no vm/mcp/ folder, so nothing in this repo installs
+# an app here, and install-otel.sh installs vm/inert.yaml — collect nothing,
+# send nowhere — through the same validate, swap, restart and settle as a real
+# config. It still adds otelcol to its groups and asserts the backup slot.
+#
+# Give it vm/mcp/otel.yaml when it needs to ship logs; this playbook needs no
+# change for that.
+#
+#   ansible-playbook playbooks/mcp-vm.yml
+- name: mcp
+  hosts: mcp
+  become: true
+  roles:
+    - { role: vm_push, tags: [always] }
+    - { role: vm_unit, unit: otel, tags: [otel] }

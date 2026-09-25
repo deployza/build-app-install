@@ -1,0 +1,37 @@
+---
+# ziniapps-vm — three assess apps and two ziniapps sites, in dz-ziniapps.
+#
+# EVERY UNIT IS A TAG. No tags runs them all, in the order below:
+#
+#   ansible-playbook playbooks/ziniapps-vm.yml                          # everything
+#   ansible-playbook playbooks/ziniapps-vm.yml --tags assess-exam       # one app
+#   ansible-playbook playbooks/ziniapps-vm.yml --tags assess-ui,assess-exam
+#   ansible-playbook playbooks/ziniapps-vm.yml --tags apps              # every app, no otel
+#   ansible-playbook playbooks/ziniapps-vm.yml --tags otel              # collector only
+#   ansible-playbook playbooks/ziniapps-vm.yml --skip-tags otel
+#   ansible-playbook playbooks/ziniapps-vm.yml --list-tags
+#
+# The same units from a clone on the box:
+#
+#   sudo bash vm/ziniapps-vm/install.sh production [unit ...]
+#
+# THIS ORDER IS vm/ziniapps-vm/install.sh's UNITS ORDER — KEEP THE TWO IN SYNC.
+# Why it is load-bearing is written there.
+#
+# hundi-ui is tagged `never`: its script ships, but it runs only when named
+# (--tags hundi-ui). It has never been deployed; drop `never` to change that,
+# and add it to install.sh's UNITS too.
+- name: ziniapps-vm
+  hosts: ziniapps-vm
+  become: true
+  roles:
+    - { role: vm_push, tags: [always] }
+
+    - { role: vm_unit, unit: assess-server, tags: [apps, assess-server] }
+    - { role: vm_unit, unit: assess-ui,     tags: [apps, assess-ui] }
+    - { role: vm_unit, unit: assess-exam,   tags: [apps, assess-exam] }
+    - { role: vm_unit, unit: ziniapps-go,   tags: [apps, ziniapps-go] }
+    - { role: vm_unit, unit: ziniapps-www,  tags: [apps, ziniapps-www] }
+    - { role: vm_unit, unit: hundi-ui,      tags: [never, hundi-ui] }
+
+    - { role: vm_unit, unit: otel, tags: [otel] }

@@ -1,0 +1,18 @@
+---
+# site.yml — every VM, one host at a time.
+#
+# SERIAL BY IMPORT, not by the `serial` keyword: these playbooks run in order,
+# so a failure on ziniapps-vm stops the run before deployza-vm is touched.
+#
+# TAGS CROSS THE FLEET, because every VM's playbook uses the same two group
+# tags:
+#
+#   ansible-playbook playbooks/site.yml --tags otel      # re-push every collector
+#   ansible-playbook playbooks/site.yml --tags apps      # every app on every host
+#
+# A unit tag (assess-exam, www-apidocs) also works here; it simply matches on
+# the one host that has it.
+- import_playbook: mcp-vm.yml
+- import_playbook: ziniapps-vm.yml
+- import_playbook: deployza-vm.yml
+- import_playbook: devops-vm.yml

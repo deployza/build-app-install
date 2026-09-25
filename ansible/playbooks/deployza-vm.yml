@@ -1,0 +1,25 @@
+---
+# deployza-vm — www.deployza.com: the marketing site and the MkDocs API docs,
+# in dz-api-host.
+#
+# NOT YET CREATED IN TERRAFORM. This playbook will fail at the tunnel until the
+# instance exists.
+#
+#   ansible-playbook playbooks/deployza-vm.yml                        # everything
+#   ansible-playbook playbooks/deployza-vm.yml --tags www-apidocs     # docs only
+#   ansible-playbook playbooks/deployza-vm.yml --tags www-website     # site only
+#   ansible-playbook playbooks/deployza-vm.yml --tags otel            # collector only
+#
+# On the box:  sudo bash vm/deployza-vm/install.sh production [unit ...]
+#
+# THIS ORDER IS vm/deployza-vm/install.sh's UNITS ORDER — KEEP THE TWO IN SYNC.
+- name: deployza-vm
+  hosts: deployza-vm
+  become: true
+  roles:
+    - { role: vm_push, tags: [always] }
+
+    - { role: vm_unit, unit: www-website, tags: [apps, www-website] }
+    - { role: vm_unit, unit: www-apidocs, tags: [apps, www-apidocs] }
+
+    - { role: vm_unit, unit: otel, tags: [otel] }

@@ -21,8 +21,9 @@ Guidance for Claude Code when working in this repository.
 
 ## What this repo is
 
-**Per-app deploy scripts.** These are the scripts a host runs to install a
-Deployza application onto itself. **How they arrive differs by platform, and
+**How an application reaches a host: the scripts, and the thing that runs
+them.** `vm/` and `docker/` are the scripts a host runs to install a Deployza
+application onto itself; `ansible/` is the pusher that puts them there. **How they arrive differs by platform, and
 that asymmetry is permanent** (see the `vm/` vs `docker/` box below):
 
 - **VM** — the `vm/` folder is **PUSHED** to a running instance over SSH through
@@ -35,113 +36,128 @@ One script per app **per platform**:
 
 ```
 build-app-install/
-├── vm/                    # organised by LAYER, not by product
-│   ├── common.sh          # ONE copy at the vm/ ROOT, sourced as ../../common.sh
-│   ├── apps/<app>/<app>.sh        # install ONE app
-│   ├── apps/<app>/receiver.yaml   # what that app writes (assess-server only)
-│   ├── systems/_base.yaml         # journald + hostmetrics — every host
-│   ├── systems/<server>.yaml      # what a server writes — RECEIVERS ONLY:
-│   │                              #   tomcat, nginx, mysql, mcp
-│   ├── instances/<vm>/
-│   │   ├── install.sh             # install everything ONE HOST runs
-│   │   ├── exporter.yaml          # that host's processors AND exporters
-│   │   └── pipeline.yaml          # that host's service graph
-│   └── otel/              # TOOLING, not an app: push.sh + apply.sh
-└── docker/
-    ├── common.sh          # constants SOURCED by every docker/ script
-    └── <APP_NAME>.sh      # deploy into the PID-1 Tomcat of a container
+├── vm/                    # organised by HOST — one folder per VM
+│   ├── common.sh          # constants, sourced as ../common.sh from vm/<vm>/
+│   ├── units.sh           # the runner every vm/<vm>/install.sh sources
+│   ├── install-otel.sh    # the `otel` unit: validate, swap, restart, verify, roll back
+│   ├── inert.yaml         # collect nothing — hosts with no otel.yaml, and --inert
+│   └── <vm>/              # ziniapps-vm/, deployza-vm/
+│       ├── install.sh     #   UNITS, in order; run all or any: install.sh <env> [unit...]
+│       ├── <app>.sh       #   one unit per app this host runs
+│       └── otel.yaml      #   this host's COMPLETE collector config
+├── docker/
+│   ├── common.sh          # constants SOURCED by every docker/ script
+│   └── <APP_NAME>.sh      # deploy into the PID-1 Tomcat of a container
+└── ansible/               # THE PUSHER — runs on a CONTROLLER, never on a host
+    ├── inventory/hosts.yml        key = GCE instance name = vm/<vm>/ folder
+    ├── playbooks/<vm>.yml         one per VM, one role line (and tag) per unit
+    └── roles/{vm_push,vm_unit}/
 ```
 
 Either way the scripts land at `/tmp/deployza/repo`. A container runs
-`docker/<APP_NAME>.sh <APP_ENV>`; a VM runs either one app,
-`vm/apps/<APP_NAME>/<APP_NAME>.sh <APP_ENV>`, or everything a host needs,
-`vm/instances/<VM>/install.sh <APP_ENV>`. `APP_ENV` (`development` / `production`) is
-the sole argument in every case.
+`docker/<APP_NAME>.sh <APP_ENV>`; a VM runs `vm/<vm>/install.sh <APP_ENV>
+[unit ...]`, or a unit directly (`vm/<vm>/<app>.sh <APP_ENV>`,
+`vm/install-otel.sh`). `APP_ENV` (`development` / `production`) is the sole
+argument wherever an app is being deployed.
 
-**`vm/` is grouped by layer, `docker/` is flat.** The three VM folders answer
-three different questions, and keeping them apart is the point:
+## A VM is a folder of units
 
-| folder | question | keyed by |
+**Restructured 2026-09-25** from a layered tree (`vm/apps/`, `vm/systems/`,
+`vm/instances/`, `vm/steps/`, `render.sh`). Everything a host runs now lives in
+its own folder, and each piece of work is a **unit**:
+
+| unit | script | what it does |
 |---|---|---|
-| `vm/apps/` | what does this **app** need to install? | app name |
-| `vm/systems/` | what logs does this **server** produce? | tomcat, nginx, mysql, … |
-| `vm/instances/` | what runs on this **host**, how are its records stamped, and where do they go? | VM name |
+| `<app>` | `vm/<vm>/<app>.sh <APP_ENV>` | install one app |
+| `otel` | `vm/install-otel.sh [--vm NAME] [--inert] [--check]` | install `vm/<vm>/otel.yaml` |
 
-A product (`assess`, `ziniapps`) is not a folder anywhere: it is a set of apps
-that a host happens to run, and `vm/instances/<vm>/install.sh` is the only place that
-set is written down. `ziniapps-vm` runs the three assess apps and both ziniapps
-sites, which is exactly why exporters are per-VM — one collector per host means
-one destination per host.
+`vm/<vm>/install.sh` holds the host's ordered `UNITS` (apps, then `otel`) and
+runs all of them, `apps` (every unit but otel), or the units you name:
 
-Each script: downloads the app's `conf/` folder + WAR from **GCS**
-(`gs://dz-builds/<APP_ENV>/<APP_NAME>/`), reads `install.properties`,
-provisions the MySQL DB/user, installs the per-webapp Tomcat context
-(`<ctx>.xml` + properties + logback) into `$CATALINA_HOME/conf/Catalina/localhost`,
-and deploys the WAR under the stable name `<ctx>.war` (serving at `/<ctx>`).
+```bash
+sudo bash vm/ziniapps-vm/install.sh production                 # every unit
+sudo bash vm/ziniapps-vm/install.sh production assess-exam     # one
+sudo bash vm/ziniapps-vm/install.sh production apps            # all apps
+sudo bash vm/install-otel.sh                                   # otel only
+bash vm/install-otel.sh --vm ziniapps-vm --check               # validate, touch nothing
+```
 
-## `vm/otel/` is tooling, not an app — read this before treating it like one
+A unit named explicitly need not be in `UNITS`: that is how `hundi-ui` — present
+on `ziniapps-vm`, never deployed — stays reachable on purpose.
 
-[`vm/otel/`](vm/otel/) breaks the "one script per app" shape of its siblings, on
-purpose. It holds the two scripts that assemble, ship and apply an
-OpenTelemetry Collector config, plus `inert.yaml` (the "collect nothing" config
-that `--exporter none` ships) — and it differs from the other `vm/` folders in
-three ways that matter:
+**The order is load-bearing** and is written down in each `install.sh`: on
+`ziniapps-vm` the per-PATH apps precede the per-HOST sites (whose server blocks
+include `app.d/*.conf`), and `otel` goes last. **The playbook lists the same
+units in the same order — change both together.**
 
-- **It is pushed, not pulled** — and it was the first thing here to be. Nothing
-  on the VM runs it: `vm/otel/push.sh` runs on your laptop, assembles
-  `vm/instances/<vm>/pipeline.yaml` from that VM's `exporter.yaml` and one
-  `vm/systems/` receiver fragment per token in the target's image flavor, ships
-  the result over the IAP tunnel and runs `vm/otel/apply.sh` there. Nothing at
-  boot touches it.
-- **The otel files split by kind of statement, not by server.** `vm/systems/`
-  and `vm/apps/` hold **receivers only** — what a piece of software writes, true
-  on every host that runs it. `vm/instances/<vm>/exporter.yaml` holds the
-  processors and exporters, and `pipeline.yaml` the service graph, because a VM
-  runs one collector with one `config.yaml`.
-- **A "service" is one pipeline, one `service.name`, one destination**, declared
-  in two halves: a `logs/<name>` pipeline in `pipeline.yaml` and a matching
-  `resource/<name>` processor in `exporter.yaml`. The pipelines are hand-written;
-  `push.sh` checks them against the receivers it assembled. Records carry exactly
-  three resource attributes — `service.name`, `host.name`, `host.project`.
-- **The destination is Google Pub/Sub, authenticated by IAM.** Two topics, and
-  the VM's attached service account is the publisher, so there are no
-  credentials in this repo and nothing renders a `${env:}` reference.
-- **It is not selected by `APP_NAME`.** The pusher names the target instance
-  directly; the flavor comes from the VM's own `/etc/image-manifest.txt`.
+> **Every unit runs two ways and is ONE implementation.** Ansible ships the
+> folder and runs the script (`--tags assess-exam`); a person clones the repo on
+> the box and runs the same script. No unit may exist only on the controller —
+> the IAP tunnel is exactly the kind of thing that is down when you need it.
+
+An app that ran on two hosts would have a copy of its script in each folder.
+None does today.
+
+## `otel.yaml` is the whole config — no assembly
+
+Each `vm/<vm>/otel.yaml` holds **receivers, processors, exporters and service**
+and is installed verbatim at `/etc/otelcol/config.yaml`. There are no fragments,
+no placeholders and no render step.
+
+- **A "service" is one pipeline, one `service.name`, one destination**: a
+  `logs/<name>` pipeline under `service:` and a matching `resource/<name>`
+  processor. Records carry exactly three resource attributes — `service.name`,
+  `host.name`, `host.project`.
+- **An app is collected only if it has its own receiver** (`filelog/<app>`),
+  processor and pipeline. `filelog/tomcat` deliberately does not glob the per-app
+  log dirs, so each line ships once.
+- **The destination is Google Pub/Sub, authenticated by IAM** — the VM's
+  attached service account is the publisher. No credentials in this repo.
+- **`install-otel.sh` does the part that must be right on the box**: validate
+  against the pinned `/opt/otelcol/bin/otelcol-contrib`; check `host.project`
+  against the metadata server; add `otelcol` to `systemd-journal`/`adm`/`tomcat`
+  where they exist (**before** the restart — groups are read at process start,
+  and a missing one is the number one silent failure); back up, swap, **restart
+  never reload**, wait `SETTLE_SECONDS` and confirm the unit stayed up; restore
+  the backup if not.
+- **A host with no `vm/<vm>/otel.yaml` gets `vm/inert.yaml`** — `mcp` today.
+  `--inert` forces it (the off switch).
 - **There is no `docker/` counterpart, deliberately.** Containers log to stdout
-  and the runtime collects it. That asymmetry is also why this folder lives
-  *inside* `vm/` rather than beside it: Otel here is a VM concern end to end. Do
-  not add a container equivalent for symmetry.
+  and the runtime collects it.
 
 The image bakes only the collector binary, its unit and an inert `nop` config,
-so a VM with nothing pushed to it collects nothing and sends nowhere. See
-[`vm/otel/README.md`](vm/otel/README.md) and
-[`../build-docs/ops-execution.md`](../build-docs/ops-execution.md).
+so a VM with nothing pushed to it collects nothing and sends nowhere.
 
-> ## ⚠ `vm-startup.sh` IS GONE — and nothing replaces it yet
+> ## ⚠ `vm-startup.sh` IS GONE — `ansible/` replaces it
 >
-> **Done 2026-09-24** (ops-execution.md Part C): the boot-time launcher that
-> cloned this repo and ran `vm/<APP_NAME>.sh` (the layout was flat then) is
-> deleted, along with its systemd unit and installer, and `dz-ziniapps/vms.tf` no longer sets
-> `APP_NAME`/`APP_ENV`. VMs are push-only. `docker-startup.sh` stays, so the
-> `vm/` ↔ `docker/` symmetry described below is **permanently broken by
-> design** — do not restore the VM launcher for consistency.
+> **Done 2026-09-24** (ops-execution.md Part C): the boot-time launcher is
+> deleted and VMs are push-only. `docker-startup.sh` stays, so the `vm/` ↔
+> `docker/` symmetry is **permanently broken by design** — do not restore the
+> VM launcher for consistency.
 >
-> **The replacement was deliberately NOT built first.** `otel/push.sh` is the
-> only pusher in this repo. Until a `vm/` pusher exists there is **no working
-> way to deploy an app onto a VM**: a new VM serves 404, a reboot no longer
-> redeploys, and recreating an instance does not bring the app back.
+> **It has never been run against a real VM.** Nothing here is exercised or
+> CI'd, `deployza-vm` and `devops-vm` do not exist in Terraform yet, and the
+> `roles/iap.tunnelResourceAccessor` gap in `config-iam/` blocks the tunnel to
+> `dz-ziniapps` until it is fixed.
 >
-> **Deploying by hand, meanwhile:** copy the whole `vm/` folder (the app script
-> **and** `common.sh` — every script `source`s it) to the instance over the IAP
-> tunnel and run `sudo bash vm/instances/<VM>/install.sh <APP_ENV>` (or a single
-> app's `vm/apps/<APP_NAME>/<APP_NAME>.sh`). Shipping one script, or one layer
-> folder, breaks at the `source` line.
->
-> **Writing the pusher** is the next job: tar `vm/`, ship it to
-> `/tmp/deployza/repo`, run `vm/instances/<vm>/install.sh <APP_ENV>`. The scripts
-> themselves need no changes — they already take `APP_ENV` as `$1`; the pusher
-> just has to know which VM it is pushing to.
+> **Deploying by hand, meanwhile:** clone this repo on the instance and run
+> `sudo bash vm/<vm>/install.sh <APP_ENV> [unit ...]`. Copying a loose script
+> breaks at the `source` line — `common.sh` must sit one level above it — so
+> bring the tree, not the file.
+
+## `ansible/` is not a third platform
+
+It sits beside `vm/` and `docker/` but is **controller-side**: nothing in it is
+ever copied to a host. See [`ansible/README.md`](ansible/README.md).
+
+- **It drives `vm/` only.** There is no `ansible/docker/` and there must not be.
+- **It carries and starts; the scripts decide.** `vm_push` (tagged `always`)
+  ships `vm/<vm>/` plus the four shared `vm/` files; `vm_unit` runs one unit.
+- **Every unit is a tag**: no tags runs them all in order, `--tags assess-exam`
+  one, `--tags apps` every app, `--tags otel` the collector. Units that ship but
+  must be asked for by name are tagged `never` (`hundi-ui`).
+- **The "no secrets — ever" rule extends here.** No vault files. Secrets come
+  from Secret Manager at run time; Pub/Sub needs none at all.
 
 ## Two kinds of app: per-PATH and per-HOST
 
@@ -177,9 +193,9 @@ resolves at `www.deployza.com/api-docs/`; `ziniapps-www.sh` deliberately does
 
 Apps today: **`assess-server`**, **`assess-ui`**, **`assess-exam`**,
 **`www-apidocs`** (per-path), **`ziniapps-go`**, **`ziniapps-www`**,
-**`www-website`** (per-host), plus two orchestrators — **`assess-install`**
-(the five assess/ziniapps apps) and **`www-install`** (`www-website` +
-`www-apidocs`, the two halves of the www.deployza.com host).
+**`www-website`** (per-host). `ziniapps-vm` runs the three assess apps and both
+ziniapps sites (plus `hundi-ui`, present but never deployed); `deployza-vm` runs
+`www-website` + `www-apidocs`, the two halves of the www.deployza.com host.
 
 ## The deploy contract
 
@@ -201,7 +217,7 @@ Apps today: **`assess-server`**, **`assess-ui`**, **`assess-exam`**,
 Keep the two as explicit copies. They share the same shape but differ where the
 runtimes differ; do **not** merge them behind a platform flag.
 
-| | `vm/apps/<app>/<app>.sh` | `docker/<app>.sh` |
+| | `vm/<vm>/<app>.sh` | `docker/<app>.sh` |
 | --- | --- | --- |
 | Tomcat identity | `tomcat` **systemd** service, runs as the `tomcat` user | **PID 1** (root); no `tomcat` user exists |
 | File ownership | `install -o tomcat -g tomcat`, `chown tomcat:tomcat` | **no** `chown` (would fail "invalid user: tomcat" and, under `set -e`, abort the deploy / kill the container) |
@@ -211,7 +227,7 @@ runtimes differ; do **not** merge them behind a platform flag.
 ## `common.sh` — one per platform folder
 
 Each of `vm/` and `docker/` has **its own** `common.sh` — `vm/common.sh` sits at
-the `vm/` root and is sourced as `../../common.sh` from inside `vm/apps/<app>/`,
+the `vm/` root and is sourced as `../common.sh` from inside `vm/<vm>/`,
 `docker/common.sh` sits beside its flat scripts — sourced by every deploy
 script in that folder from its own directory:
 
@@ -231,7 +247,7 @@ per app:
 | nginx seams | `NGINX_APP_D`, `NGINX_SITE_D`, `NGINX_CONF_MAIN`, `INCLUDE_MARKER`, `NGINX_SERVICE`, `NGINX_USER`, `NGINX_GROUP` | **none** — Tomcat is PID 1 and serves directly; there is no nginx in an app container |
 
 **Two copies is the deliberate choice**, keeping each platform folder
-self-contained for the same reason `vm/apps/<app>/<app>.sh` and
+self-contained for the same reason `vm/<vm>/<app>.sh` and
 `docker/<app>.sh` are
 separate copies (next section). **The price: `GCS_BASE_URL` and `STAGE_ROOT`
 appear in both files — change the bucket in BOTH, or the two platforms pull
@@ -243,16 +259,14 @@ context path, `DEFAULT_WEB_ROOT` (`/var/www/app` for per-PATH apps,
 `/var/www/site` for per-HOST sites). Nor may `docker/common.sh` ever name the
 `tomcat` user or group: it does not exist in those images.
 
-Both files are sourced, never executed — no shebang, no `set -e`, not in
-`CHILD_SCRIPTS`. Their values are `readonly`, which is safe because each deploy
-script is its own `bash` process (the orchestrator runs children via
-`bash <child>`), so each is sourced exactly once per process.
-`assess-install.sh` sources neither — it deploys nothing, it only invokes the
-children.
+Both files are sourced, never executed — no shebang, no `set -e`, never a unit.
+Their values are `readonly`, which is safe because each unit is its own `bash`
+process (`vm/units.sh` runs each via `bash <script>`), so each is sourced exactly
+once per process. `install.sh` sources neither.
 
-**This depends on the whole `vm/` folder reaching the host.** A push that
-copied a single script would break at the `source` line — the pusher must ship
-the folder, not the file.
+**This depends on `vm/common.sh` reaching the host with the VM folder.** A push
+that copied a single script would break at the `source` line — `vm_push` ships
+the folder plus the shared `vm/` files, not the file.
 
 ## Conventions
 
@@ -275,20 +289,25 @@ the folder, not the file.
 
 ## When adding a new app
 
-1. Add `vm/apps/<app>/<app>.sh` **and** `docker/<app>.sh`, then add the app to
-   the `CHILD_SCRIPTS` list of every `vm/instances/<vm>/install.sh` that should run it. Pick the template by model (see
+1. Add `vm/<vm>/<app>.sh` (in every VM folder that should run it) **and**
+   `docker/<app>.sh`, then add the app to `UNITS` in that `vm/<vm>/install.sh`
+   **and** a `vm_unit` line (tags `[apps, <app>]`) in the same position in
+   `ansible/playbooks/<vm>.yml`. Pick the template by model (see
    "Two kinds of app" above): `assess-server` for a per-PATH app backed by
    Tomcat, `assess-ui` for a per-PATH static bundle, `ziniapps-www` for a
    per-HOST static site. Keep the vm/docker differences above.
 2. Fix `APP_NAME` in each to the new name (it is hardcoded — the script *is* that
-   app's installer; the launcher resolves it by filename). Keep the
-   `source "${SCRIPT_DIR}/common.sh"` line — do not re-declare `GCS_BASE_URL`,
+   app's installer; the unit is resolved by filename). Keep the `source` line
+   (`../common.sh` on a VM, `common.sh` in docker/) — do not re-declare `GCS_BASE_URL`,
    `STAGE_ROOT` or the `NGINX_*` constants locally.
 3. Ensure the app's `conf/` (incl. `install.properties`) + WAR are published to
    `gs://dz-builds/<env>/<app>/`.
-4. Deploy it: on a VM, push the whole `vm/` tree to the host and run
-   `vm/apps/<app>/<app>.sh <env>` (or that host's `vm/instances/<vm>/install.sh`); for a container, start it with env
-   `APP_NAME=<app>` `APP_ENV=<env>`.
+4. If it should be collected as its own service, add its `filelog/<app>`
+   receiver, `resource/<app>` processor and `logs/<app>` pipeline to
+   `vm/<vm>/otel.yaml`.
+5. Deploy it: on a VM, `ansible-playbook playbooks/<vm>.yml --tags <app>`, or on
+   the box `sudo bash vm/<vm>/install.sh <env> <app>`; for a container, start it
+   with env `APP_NAME=<app>` `APP_ENV=<env>`.
 
 ## Gotchas
 

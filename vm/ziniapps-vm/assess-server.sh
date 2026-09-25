@@ -1,0 +1,514 @@
+#!/bin/bash
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# assess-server.sh — app deploy script for the assess backend WAR. Invoked by
+# instances/ziniapps-vm/install.sh, the orchestrator that installs all three assess apps
+# (server, ui, exam) onto the same Tomcat. It downloads the app's install FOLDER and
+# the WAR from GCS, provisions the MySQL DB/user, installs the per-webapp Tomcat
+# context (context.xml + properties + logback) into
+# $CATALINA_HOME/conf/Catalina/localhost, and hot-deploys the WAR into the
+# already-running Tomcat, then writes the nginx routing drop-in that proxies
+# /<ctx>/ to Tomcat and reloads nginx.
+#
+# On the tomcat-nginx-mysql image nginx owns :80 and Tomcat is only reachable on
+# 127.0.0.1:8080. That image bakes /etc/nginx/app.d/ EMPTY on purpose — every
+# path except /nginx-health 404s until an app deploy script drops its own
+# location blocks in. Deploying the WAR alone therefore yields a working
+# :8080/<ctx> and a 404 on :80/<ctx>; write_nginx_conf is what closes that gap.
+# See build-vm-images/scripts/ubuntu/install-nginx.sh and, on the VM itself,
+# /etc/nginx/app.d/README.
+#
+# Contract: invoked as `assess-server.sh APP_ENV` (by instances/ziniapps-vm/install.sh).
+# APP_NAME is fixed to "assess-server" here (the backend's GCS artifacts live
+# under gs://dz-builds/<env>/assess-server/); the single argument is
+# APP_ENV ("$1").
+#
+# GCS layout (${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/):
+#   install/                       the whole config folder, copied verbatim:
+#     install.properties             ALL deploy values (see the key list below)
+#     <install.app.properties>       the app's runtime config
+#     <install.app.context.path>.xml per-webapp Tomcat context.xml
+#     <install.app.logback.file>     external logback config
+#   <install.war>                  the versioned WAR
+#
+# Install targets (two DIFFERENT directories under $CATALINA_HOME/conf):
+#   <ctx>.xml                 -> conf/Catalina/localhost/<ctx>.xml
+#                                (Tomcat scans this dir for context descriptors)
+#   app.properties, logback   -> conf/<ctx>/
+#                                (a NON-scanned dir; <ctx>.xml points its
+#                                <Parameter> values here via
+#                                file:${catalina.base}/conf/<ctx>/...)
+# app.properties and logback must NOT go in conf/Catalina/localhost/ — Tomcat
+# would try to deploy the stray logback .xml there as a webapp.
+#
+# install.properties is the single source of truth for the deploy; NOTHING is
+# derived by this script. Keys used:
+#   install.war                  WAR filename to download and deploy
+#   install.catalina.home        target Tomcat home (CATALINA_HOME)
+#   install.app.properties       app properties filename inside conf/
+#   install.app.context.path     context name -> <ctx>.xml, <ctx>.war, path /<ctx>
+#   install.app.logback.file     logback filename inside conf/
+#   install.app.db               app database (schema) name to create
+#   install.app.db.username      app DB user to create/grant
+#   install.app.db.password      app DB user password
+#   install.mysql.root.user      MySQL admin user (to provision the app DB/user)
+#   install.mysql.root.password  MySQL admin password ("" => passwordless socket)
+#
+# The nginx drop-in is GENERATED, not downloaded: its content is fully determined
+# by CONTEXT_PATH, which we already have, so it needs no key of its own and no
+# edit to the GCS install/ folder.
+#
+# Config model: the app no longer reads -Dconfig.dir/-Dlogs.dir (those were
+# dropped from setenv.sh). Instead <ctx>.xml is installed as
+#   $CATALINA_HOME/conf/Catalina/localhost/<ctx>.xml
+# and its <Parameter> entries are read by the app's ServletContextListener at
+# startup. Those entries point at app.properties + logback under conf/<ctx>/ (see
+# "Install targets" above). Tomcat names the context by the file's basename, so
+# <ctx>.xml -> context path /<ctx>. The conf files are installed VERBATIM: the
+# absolute paths inside <ctx>.xml must already match install.catalina.home.
+#
+# The WAR is deployed under the stable name <ctx>.war, so it serves at /<ctx>
+# regardless of the versioned filename in install.war.
+#
+# Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
+# unit. Where its output lands depends on how it is invoked:
+#   * Pushed (the normal path): its output goes to wherever the pusher ran it —
+#     there is no systemd unit and no journal of its own. Capture it there.
+#   * Run manually over SSH: output goes to your terminal; capture with
+#       sudo bash apps/assess-server/assess-server.sh <APP_ENV> 2>&1 | tee /tmp/assess-server.log
+#
+# This script only DEPLOYS the WAR — the app then runs inside the separate
+# 'tomcat' service, whose logs are elsewhere:
+#   sudo journalctl -u tomcat -f
+#   sudo tail -f /home/tomcat/instance/logs/catalina.out
+# -----------------------------------------------------------------------------
+
+# =============================================================================
+# Variable declarations
+# =============================================================================
+# All variables are declared here up front. Static values are set inline;
+# values that depend on runtime input (the APP_ENV argument, or keys read from
+# install.properties) are declared empty here and populated in main() as they
+# become available. The comment on each explains where its value comes from.
+
+# --- Fixed identity -----------------------------------------------------------
+# This script IS the assess backend installer. APP_NAME is fixed to
+# "assess-server" because the backend's GCS artifacts (install/ + WAR) still live
+# under gs://dz-builds/<env>/assess-server/. Only APP_ENV varies
+# (development/production) and is the sole argument.
+readonly APP_NAME="assess-server"
+
+# The 'tomcat' service the deployed WAR runs inside, and its file owner.
+readonly TOMCAT_SERVICE="tomcat"
+readonly TOMCAT_USER="tomcat"
+readonly TOMCAT_GROUP="tomcat"
+
+# --- Shared estate constants --------------------------------------------------
+# GCS_BASE_URL, STAGE_ROOT and the NGINX_* seams live in vm/common.sh, at the
+# vm/ root, two levels up from this script (one copy for the whole tree),
+# so that changing the artifact bucket (or any path the images bake) is one
+# edit for every VM app instead of one per app. docker/ keeps its
+# OWN common.sh — the two platform folders are self-contained, so a bucket
+# change is two edits, one per folder. common.sh documents what belongs there
+# and what deliberately stays here (anything per-app).
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../common.sh
+source "${SCRIPT_DIR}/../common.sh"
+
+# --- Populated in main() from the APP_ENV argument ----------------------------
+APP_ENV=""              # the single positional argument ("$1"): dev/production
+INSTALL_URI=""          # ${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/install
+STAGE_DIR=""            # local staging dir for the downloaded install files + WAR
+INSTALL_PROPS=""        # ${STAGE_DIR}/install.properties
+
+# --- Populated in main() from install.properties ------------------------------
+APP_WAR_FILE=""         # install.war             WAR filename to download/deploy
+CATALINA_HOME=""        # install.catalina.home   target Tomcat home
+APP_PROPS_FILE=""       # install.app.properties  app properties filename
+CONTEXT_PATH=""         # install.app.context.path  context name (/<ctx>)
+APP_DB=""               # install.app.db          app database (schema) name
+APP_DB_USER=""          # install.app.db.username app DB user to create/grant
+APP_DB_PASSWORD=""      # install.app.db.password app DB user password
+LOGBACK_FILE=""         # install.app.logback.file  logback filename
+MYSQL_ROOT_USER=""      # install.mysql.root.user   MySQL admin user
+MYSQL_ROOT_PASSWORD=""  # install.mysql.root.password  ("" => passwordless socket)
+
+# --- Derived in main() from CATALINA_HOME / the conf keys ---------------------
+TOMCAT_WEBAPPS=""       # ${CATALINA_HOME}/webapps
+CATALINA_LOCALHOST=""   # ${CATALINA_HOME}/conf/Catalina/localhost  (<ctx>.xml)
+CONF_APP_DIR=""         # ${CATALINA_HOME}/conf/${CONTEXT_PATH}  (props + logback)
+STAGED_APP_PROPS=""     # ${STAGE_DIR}/${APP_PROPS_FILE}
+STAGED_CONTEXT_XML=""   # ${STAGE_DIR}/${CONTEXT_PATH}.xml
+STAGED_LOGBACK=""       # ${STAGE_DIR}/${LOGBACK_FILE}
+TMP_WAR=""              # ${STAGE_DIR}/${APP_WAR_FILE}  (real versioned name)
+WAR_URI=""              # GCS URI of the WAR
+WAR_PATH=""             # ${TOMCAT_WEBAPPS}/${CONTEXT_PATH}.war (deployed name)
+EXPLODED_DIR=""         # ${TOMCAT_WEBAPPS}/${CONTEXT_PATH}     (Tomcat-exploded)
+NGINX_CONF=""           # ${NGINX_APP_D}/${CONTEXT_PATH}.conf   (routing drop-in)
+
+# =============================================================================
+# Functions
+# =============================================================================
+
+# read_prop <key>: prints the value of the last matching line in
+# install.properties, trimmed of surrounding whitespace AND surrounding
+# single/double quotes (values like install.mysql.root.user="root" are quoted
+# in the file).
+read_prop() {
+  local key="$1" val
+  val="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$INSTALL_PROPS" \
+    | tail -n1 \
+    | sed 's/[[:space:]]*$//')"
+  val="${val%\"}"; val="${val#\"}"   # strip a matching pair of double quotes
+  val="${val%\'}"; val="${val#\'}"   # strip a matching pair of single quotes
+  printf '%s' "$val"
+}
+
+# require_prop <var> <key>: read a key that must be non-empty, or abort.
+require_prop() {
+  local __var="$1" __key="$2" __val
+  __val="$(read_prop "$__key")"
+  if [[ -z "$__val" ]]; then
+    echo "ERROR: required key '${__key}' not set in ${INSTALL_PROPS}." >&2
+    exit 1
+  fi
+  printf -v "$__var" '%s' "$__val"
+}
+
+# parse_args: validate the caller's contract and set APP_ENV.
+# APP_ENV is required — refuse to run without it rather than deploying to a
+# wrong default environment.
+parse_args() {
+  APP_ENV="${1:-}"
+  if [[ -z "$APP_ENV" ]]; then
+    echo "ERROR: APP_ENV is required." >&2
+    echo "Usage: $0 APP_ENV" >&2
+    exit 1
+  fi
+}
+
+# prepare_staging: (re)create a clean staging dir so it holds only the current
+# deploy's artifacts. The install/ contents and the WAR share this one dir — the
+# WAR's filename (install.war) never collides with an install file.
+prepare_staging() {
+  echo "Clearing previous ${APP_NAME} staging dir (${STAGE_DIR})..."
+  rm -rf "${STAGE_DIR:?}"
+  mkdir -p "$STAGE_DIR"
+}
+
+# download_install: recursive copy of the whole install/ folder into STAGE_DIR.
+# Trailing '/*' copies its contents straight into STAGE_DIR (rather than nesting
+# an install/ dir inside it). Verifies install.properties landed.
+download_install() {
+  echo "Downloading install folder for ${APP_NAME} (${APP_ENV})..."
+  echo "  install: ${INSTALL_URI}/"
+  gsutil -m cp -r "${INSTALL_URI}/*" "$STAGE_DIR/"
+
+  if [[ ! -f "$INSTALL_PROPS" ]]; then
+    echo "ERROR: install.properties missing after download: $INSTALL_PROPS" >&2
+    exit 1
+  fi
+}
+
+# load_props: read every deploy value straight from install.properties and
+# derive the paths that depend on those values. install.properties is the single
+# source of truth — nothing here is derived from anything but its keys.
+load_props() {
+  require_prop APP_WAR_FILE      'install.war'
+  require_prop CATALINA_HOME     'install.catalina.home'
+  require_prop APP_PROPS_FILE    'install.app.properties'
+  require_prop CONTEXT_PATH      'install.app.context.path'
+  require_prop APP_DB            'install.app.db'
+  require_prop APP_DB_USER       'install.app.db.username'
+  require_prop APP_DB_PASSWORD   'install.app.db.password'
+  require_prop LOGBACK_FILE      'install.app.logback.file'
+  require_prop MYSQL_ROOT_USER   'install.mysql.root.user'
+
+  # NOT require_prop: an empty root password is valid — it means "authenticate
+  # over the passwordless local socket" (the baked image installs MySQL with no
+  # root password), and the -p flag is then omitted below.
+  MYSQL_ROOT_PASSWORD="$(read_prop 'install.mysql.root.password')"
+
+  # CONTEXT_PATH is interpolated into the generated nginx location blocks as well
+  # as into Tomcat paths. A value containing a slash would produce a location that
+  # does not mean what it looks like, so require a bare name.
+  if [[ ! "$CONTEXT_PATH" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "ERROR: install.app.context.path must be a bare name matching" >&2
+    echo "  [A-Za-z0-9][A-Za-z0-9._-]* (no slashes); got: '${CONTEXT_PATH}'" >&2
+    exit 1
+  fi
+
+  # Tomcat locations derived from CATALINA_HOME.
+  TOMCAT_WEBAPPS="${CATALINA_HOME}/webapps"
+  CATALINA_LOCALHOST="${CATALINA_HOME}/conf/Catalina/localhost"
+  # Non-scanned dir the <ctx>.xml <Parameter> values point at for the app's
+  # properties + logback (file:${catalina.base}/conf/<ctx>/...).
+  CONF_APP_DIR="${CATALINA_HOME}/conf/${CONTEXT_PATH}"
+
+  # Staged conf files, by the names install.properties declared.
+  STAGED_APP_PROPS="${STAGE_DIR}/${APP_PROPS_FILE}"
+  STAGED_CONTEXT_XML="${STAGE_DIR}/${CONTEXT_PATH}.xml"
+  STAGED_LOGBACK="${STAGE_DIR}/${LOGBACK_FILE}"
+
+  # WAR: staged under its real versioned name; deployed under <CONTEXT_PATH>.war.
+  TMP_WAR="${STAGE_DIR}/${APP_WAR_FILE}"
+  WAR_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/${APP_WAR_FILE}"
+  WAR_PATH="${TOMCAT_WEBAPPS}/${CONTEXT_PATH}.war"
+  EXPLODED_DIR="${TOMCAT_WEBAPPS:?}/${CONTEXT_PATH}"
+
+  # This app's nginx routing drop-in. Named after the context so each app owns
+  # exactly one file in the shared dir and a redeploy overwrites its own.
+  NGINX_CONF="${NGINX_APP_D}/${CONTEXT_PATH}.conf"
+}
+
+# verify_install_files: fail early if any file install.properties named is
+# missing from the staging dir.
+verify_install_files() {
+  local f
+  for f in "$STAGED_APP_PROPS" "$STAGED_CONTEXT_XML" "$STAGED_LOGBACK"; do
+    if [[ ! -f "$f" ]]; then
+      echo "ERROR: expected conf file missing after download: $f" >&2
+      exit 1
+    fi
+  done
+}
+
+# download_war: fetch the WAR into the staging dir under its real versioned
+# filename so the staging dir shows exactly what was deployed.
+download_war() {
+  echo "Downloading WAR ${APP_WAR_FILE}..."
+  echo "  WAR: ${WAR_URI}"
+  gsutil cp "$WAR_URI" "$TMP_WAR"
+}
+
+# provision_mysql: create the app DB and user. DB name and app user/password
+# come straight from install.properties.
+provision_mysql() {
+  echo "Creating MySQL database '${APP_DB}' and user '${APP_DB_USER}'..."
+
+  # Only pass -p when a root password is actually set; with an empty password we
+  # omit the flag entirely so auth goes over the passwordless local socket.
+  local mysql_auth_args=(-u"${MYSQL_ROOT_USER}")
+  if [[ -n "$MYSQL_ROOT_PASSWORD" ]]; then
+    mysql_auth_args+=(-p"${MYSQL_ROOT_PASSWORD}")
+  fi
+
+  mysql "${mysql_auth_args[@]}" <<SQL
+CREATE DATABASE IF NOT EXISTS \`${APP_DB}\`
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_unicode_ci;
+
+CREATE USER IF NOT EXISTS '${APP_DB_USER}'@'localhost'
+  IDENTIFIED BY '${APP_DB_PASSWORD}';
+
+ALTER USER '${APP_DB_USER}'@'localhost'
+  IDENTIFIED BY '${APP_DB_PASSWORD}';
+
+GRANT ALL PRIVILEGES ON \`${APP_DB}\`.* TO '${APP_DB_USER}'@'localhost';
+
+FLUSH PRIVILEGES;
+SQL
+}
+
+# install_context: install the per-webapp context AFTER undeploy_previous but
+# BEFORE deploy_war. The app resolves its config/log locations from
+# <CONTEXT_PATH>.xml's <Parameter> entries (read by its ServletContextListener),
+# so the descriptor must be in place before the new WAR starts up — but NOT
+# before the old context is undeployed: Tomcat's HostConfig treats <ctx>.xml as
+# belonging to the deployed WAR, so undeploying the old WAR deletes
+# conf/Catalina/localhost/<ctx>.xml. If we wrote the descriptor first,
+# undeploy_previous would remove it out from under us and the new WAR would come
+# up with no external config. Files are installed VERBATIM — the absolute paths
+# inside <CONTEXT_PATH>.xml must already match install.catalina.home.
+#
+# TWO destinations:
+#   * <CONTEXT_PATH>.xml IS the Tomcat context descriptor (its basename sets the
+#     context path) -> conf/Catalina/localhost/, the dir Tomcat scans.
+#   * app.properties + logback are what <CONTEXT_PATH>.xml points its <Parameter>
+#     values at (file:${catalina.base}/conf/<ctx>/...) -> conf/<ctx>/, a dir
+#     Tomcat does NOT scan. They must NOT go in conf/Catalina/localhost/, or
+#     Tomcat would try to deploy the stray logback .xml there as a webapp.
+install_context() {
+  echo "Installing context descriptor to ${CATALINA_LOCALHOST}/..."
+  install -d -o "$TOMCAT_USER" -g "$TOMCAT_GROUP" -m 750 "$CATALINA_LOCALHOST"
+  install -o "$TOMCAT_USER" -g "$TOMCAT_GROUP" -m 640 \
+    "$STAGED_CONTEXT_XML" "${CATALINA_LOCALHOST}/${CONTEXT_PATH}.xml"
+
+  echo "Installing app properties + logback to ${CONF_APP_DIR}/..."
+  install -d -o "$TOMCAT_USER" -g "$TOMCAT_GROUP" -m 750 "$CONF_APP_DIR"
+  install -o "$TOMCAT_USER" -g "$TOMCAT_GROUP" -m 640 \
+    "$STAGED_APP_PROPS" "${CONF_APP_DIR}/${APP_PROPS_FILE}"
+  install -o "$TOMCAT_USER" -g "$TOMCAT_GROUP" -m 640 \
+    "$STAGED_LOGBACK" "${CONF_APP_DIR}/${LOGBACK_FILE}"
+}
+
+# undeploy_previous: undeploy the previous app cleanly if present.
+# Tomcat's default host has autoDeploy="true" and unpackWARs="true", so its
+# HostConfig watcher reacts to changes in the appBase on the live server — no
+# restart needed.
+#
+# Rather than rm -rf'ing the exploded dir out from under a running context
+# (which skips the app's shutdown lifecycle and can race Tomcat's own redeploy
+# thread), we delete ONLY <CONTEXT_PATH>.war and let Tomcat undeploy the context
+# itself: it stops the context (running the app's contextDestroyed / @PreDestroy
+# hooks) and then removes the exploded <CONTEXT_PATH>/ directory. The exploded
+# dir disappearing is our signal that the undeploy has completed, so we wait for
+# that before dropping the replacement — otherwise Tomcat could delete the
+# freshly-exploded new app while finishing the old undeploy.
+undeploy_previous() {
+  if [[ ! -e "$WAR_PATH" && ! -d "$EXPLODED_DIR" ]]; then
+    return
+  fi
+
+  echo "Undeploying existing ${CONTEXT_PATH} (removing ${CONTEXT_PATH}.war, waiting for Tomcat to stop the context)..."
+  rm -f "$WAR_PATH"
+
+  # Wait for Tomcat to finish undeploying: it removes the exploded dir once the
+  # context is stopped. If autoDeploy is somehow off (no watcher), fall back to
+  # removing the exploded dir ourselves after the timeout so the deploy proceeds.
+  local undeployed=false _
+  for _ in $(seq 1 60); do
+    if [[ ! -d "$EXPLODED_DIR" ]]; then
+      undeployed=true
+      echo "Tomcat undeployed ${CONTEXT_PATH}."
+      break
+    fi
+    sleep 2
+  done
+
+  if [[ "$undeployed" != true ]]; then
+    echo "WARNING: Tomcat did not undeploy ${CONTEXT_PATH} within timeout; removing exploded dir directly." >&2
+    rm -rf "$EXPLODED_DIR"
+  fi
+}
+
+# deploy_war: drop the new WAR in and wait for Tomcat to explode it.
+# Copy to a temp name in the same dir, then rename, so Tomcat's watcher never
+# sees a partially-written WAR. The file is owned tomcat:tomcat before it becomes
+# visible under its final name.
+deploy_war() {
+  echo "Deploying new WAR..."
+  cp "$TMP_WAR" "${TOMCAT_WEBAPPS}/.${CONTEXT_PATH}.war.tmp"
+  chown "$TOMCAT_USER":"$TOMCAT_GROUP" "${TOMCAT_WEBAPPS}/.${CONTEXT_PATH}.war.tmp"
+  mv "${TOMCAT_WEBAPPS}/.${CONTEXT_PATH}.war.tmp" "$WAR_PATH"
+
+  echo "Waiting for Tomcat to explode and deploy the WAR..."
+  local _
+  for _ in $(seq 1 60); do
+    if [[ -d "$EXPLODED_DIR" ]]; then
+      echo "WAR exploded to ${EXPLODED_DIR}"
+      break
+    fi
+    sleep 2
+  done
+
+  if [[ ! -d "$EXPLODED_DIR" ]]; then
+    echo "WARNING: WAR not exploded after timeout. Check ${TOMCAT_SERVICE} logs." >&2
+  fi
+}
+
+# write_nginx_conf: generate this app's routing drop-in, proxying /<ctx>/ to
+# Tomcat. Per the app.d contract (see /etc/nginx/app.d/README) the file holds
+# ONLY location blocks — it is included INSIDE the baked :80 server{} block, so a
+# server{} wrapper here would be a syntax error.
+#
+# The proxy boilerplate is not repeated: snippets/proxy-to-tomcat.conf is baked by
+# install-nginx.sh and carries proxy_pass to the tomcat upstream plus the
+# X-Forwarded-* headers that Tomcat's RemoteIpValve reads. Including it keeps
+# those headers defined in one place for every app on the box.
+#
+# The prefix is /<ctx>/ WITH a trailing slash and proxy_pass has no URI part, so
+# nginx forwards the original path unchanged — Tomcat still sees /<ctx>/... and
+# matches its own context. The exact-match /<ctx> block exists because the bare
+# path does not match the /<ctx>/ prefix location; without it, a request to
+# /<ctx> would 404 at nginx even though Tomcat serves it.
+write_nginx_conf() {
+  echo "Writing nginx routing drop-in ${NGINX_CONF}..."
+
+  cat >"$NGINX_CONF" <<EOF
+# ${APP_NAME} — generated by build-app-install/vm/ziniapps-vm/${APP_NAME}.sh. Do not edit by
+# hand: the next deploy overwrites this file. Location blocks only (this is
+# included inside the :80 server block baked by install-nginx.sh).
+
+# Bare /${CONTEXT_PATH} does not match the /${CONTEXT_PATH}/ prefix below; send it
+# to the canonical trailing-slash form rather than letting it 404.
+location = /${CONTEXT_PATH} {
+    return 301 /${CONTEXT_PATH}/;
+}
+
+location /${CONTEXT_PATH}/ {
+    include snippets/proxy-to-tomcat.conf;
+}
+EOF
+
+  chmod 644 "$NGINX_CONF"
+}
+
+# reload_nginx: validate the whole config, then reload.
+#
+# `nginx -t` first, and treated as fatal: a reload with a broken config leaves the
+# old workers running, so nginx would keep serving the PREVIOUS routing while
+# reporting success. The test covers every app.d drop-in, so a sibling app's
+# broken file fails this too — correct, since the reload would not have applied
+# either way.
+#
+# reload (SIGHUP), not restart: it re-reads config and cycles workers without
+# dropping connections or a window where :80 is unbound.
+reload_nginx() {
+  echo "Validating nginx configuration..."
+  if ! nginx -t; then
+    echo "ERROR: nginx -t failed; not reloading. The ${CONTEXT_PATH} WAR is deployed" >&2
+    echo "  to Tomcat but nginx is not routing to it. Fix the config above and run:" >&2
+    echo "    sudo nginx -t && sudo systemctl reload ${NGINX_SERVICE}" >&2
+    exit 1
+  fi
+
+  echo "Reloading ${NGINX_SERVICE}..."
+  systemctl reload "$NGINX_SERVICE"
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+main() {
+  parse_args "$@"
+
+  # Paths that depend only on APP_ENV / APP_NAME.
+  INSTALL_URI="${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/install"
+  # Staging dir is this app's own sibling of the pushed scripts under the shared
+  # deploy root: /tmp/deployza/repo holds the pushed vm/ folder, /tmp/deployza/
+  # <APP_NAME> is ours. Same path whether pushed or run standalone over SSH.
+  STAGE_DIR="${STAGE_ROOT}/${APP_NAME}"
+  INSTALL_PROPS="${STAGE_DIR}/install.properties"
+
+  prepare_staging
+  download_install
+  load_props            # reads install.properties, derives the rest of the paths
+  verify_install_files
+  download_war
+  provision_mysql
+  undeploy_previous     # tear down old context FIRST (Tomcat's undeploy of the
+                        # old WAR can delete conf/Catalina/localhost/<ctx>.xml)
+  install_context       # then write the descriptor, so nothing deletes it before
+                        # the new WAR picks it up
+  deploy_war
+
+  # nginx routing, only where nginx is actually the front door. Unlike
+  # assess-exam.sh — which cannot serve anything without nginx and so demands it —
+  # this app is fully functional on the plain tomcat / tomcat-mysql flavors, where
+  # Tomcat owns :8080 directly and there is no app.d seam to write into. Treat the
+  # dir's absence as "this host has no proxy", not as an error.
+  if [[ -d "$NGINX_APP_D" ]] && command -v nginx >/dev/null 2>&1; then
+    write_nginx_conf
+    reload_nginx
+    echo "Deployment complete."
+    echo "App should be available at: http://<host>/${CONTEXT_PATH}/ (via nginx)"
+  else
+    echo "No ${NGINX_APP_D} and/or no nginx on this host — skipping nginx routing."
+    echo "Deployment complete."
+    echo "App should be available at: http://<host>:8080/${CONTEXT_PATH}/ (Tomcat direct)"
+  fi
+}
+
+main "$@"

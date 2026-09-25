@@ -1,0 +1,11 @@
+---
+# Must match vm_push's repo_dir.
+repo_dir: /tmp/deployza/repo
+
+# WHICH UNIT THIS INVOCATION RUNS. Set by the playbook, one role line per unit:
+#
+#   - { role: vm_unit, unit: assess-exam, tags: [apps, assess-exam] }
+#
+# `otel` runs vm/install-otel.sh; anything else runs vm/<vm>/install.sh with
+# that unit, i.e. vm/<vm>/<unit>.sh.
+unit: ""

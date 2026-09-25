@@ -1,0 +1,216 @@
+# vm/deployza-vm/otel.yaml — deployza-vm's COMPLETE OpenTelemetry Collector config.
+#
+# ONE FILE, EVERYTHING: receivers, processors, exporters and the service graph.
+# This is exactly what lands at /etc/otelcol/config.yaml on the host — nothing
+# assembles, templates or substitutes it. Install it with:
+#
+#   sudo bash vm/install-otel.sh                         # on the box
+#   ansible-playbook playbooks/deployza-vm.yml --tags otel   # from the controller
+#
+# install-otel.sh validates it against the host's pinned otelcol-contrib, checks
+# host.project below against the metadata server, backs up the live config,
+# swaps, restarts, and rolls back if the collector does not stay up.
+#
+# A "SERVICE" IS ONE PIPELINE, ONE service.name, ONE DESTINATION: a logs/<name>
+# pipeline under service: and a matching resource/<name> processor. Change one
+# without the other and you drop a service.name or reference a processor that
+# does not exist. Services on this host: journal, nginx, systemetrics.
+#
+# Exactly three resource attributes reach the destination: service.name,
+# host.name, host.project. Auth is IAM — the VM's attached service account needs
+# roles/pubsub.publisher on both topics; there are no credentials in this file.
+#
+# NO extensions (no health_check), so the only signal an install worked is the
+# systemd unit staying up. Keep it thin: tail, stamp, ship — no parsing here.
+
+receivers:
+  # Everything that logs to systemd: the OS, every service unit on the box, and
+  # any application that logs to stdout rather than to a file. Apps SHOULD log
+  # to stdout - every one that does needs no receiver of its own here.
+  #
+  # This is also where the collector's OWN startup errors land, which is the one
+  # place an EACCES on a log source is ever reported. Losing this receiver means
+  # losing the ability to debug the others.
+  journald:
+    directory: /var/log/journal
+
+  # THE ONLY METRICS SOURCE IN THE TREE. Everything else here is logs.
+  #
+  # 60s, not the 10s default: these are host vitals for answering "was the box
+  # sick at 3am", not a scheduler's input. Six scrapers at 10s is a surprising
+  # number of points per day per host to pay Pub/Sub and the destination for.
+  hostmetrics:
+    collection_interval: 60s
+    scrapers:
+      cpu:
+      load:
+      memory:
+      paging:
+      network:
+      # Disk vs filesystem: `disk` is I/O (reads, writes, time), `filesystem` is
+      # capacity (used, free). The second is what actually pages someone at 3am,
+      # so both are on.
+      disk:
+      filesystem:
+  filelog/nginx:
+    include:
+      - /var/log/nginx/*.log
+    include_file_path: true
+    start_at: end
+    attributes:
+      log.type: nginx
+
+processors:
+  # FIRST in every pipeline, always. A collector that OOMs is a collector that
+  # takes its host's memory with it; this makes it drop data instead.
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 20
+    spike_limit_percentage: 5
+
+  # host.name AND NOTHING ELSE. The system detector enables host.name and
+  # os.type by default and fifteen further attributes on request; os.type is
+  # switched off explicitly because the agreed attribute set is exactly three —
+  # service.name, host.name, host.project.
+  #
+  # The gcp detector is NOT used. It would resolve the project as
+  # cloud.account.id, under the wrong key, and bring cloud.*, GCE instance and
+  # zone attributes with it.
+  resourcedetection:
+    detectors: [system]
+    timeout: 5s
+    override: false
+    system:
+      resource_attributes:
+        host.name:
+          enabled: true
+        os.type:
+          enabled: false
+
+  # host.project, on every record. A constant: this VM does not change project.
+  # install-otel.sh refuses the install if it disagrees with the metadata server,
+  # so records are never stamped with a project the host is not in.
+  resource/host:
+    attributes:
+      - key: host.project
+        value: dz-api
+        action: upsert
+
+  # ---------------------------------------------------------------------------
+  # ONE PER SERVICE. deployza-vm runs fewer than ziniapps-vm: both sites it
+  # serves (www-website, www-apidocs) are static and go through nginx, so
+  # neither is a service in its own right, and neither has a receiver file. Give one its own
+  # pipeline only when it starts writing somewhere nginx does not.
+  # ---------------------------------------------------------------------------
+  resource/journal:
+    attributes:
+      - key: service.name
+        value: journal
+        action: upsert
+
+  resource/nginx:
+    attributes:
+      - key: service.name
+        value: nginx
+        action: upsert
+
+  resource/systemetrics:
+    attributes:
+      - key: service.name
+        value: systemetrics
+        action: upsert
+
+  # LAST in every pipeline, after everything that might drop or modify a record.
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+exporters:
+  # TWO EXPORTERS, ONE PER SIGNAL, because they are two topics. Every logs
+  # pipeline on this host ends here; telling one service's lines from another's
+  # downstream is a SUBSCRIBER concern, keyed on the service.name each pipeline
+  # stamps above.
+  googlecloudpubsub/logs:
+    # Fully qualified, which the exporter requires — a bare topic id is
+    # rejected. THIS ASSUMES THE TOPICS LIVE IN THE INSTANCE'S OWN PROJECT
+    # (dz-api). If they are central to one project instead, change the project
+    # segment here and in the metrics topic below; host.project above is a
+    # different statement and stays as it is.
+    topic: projects/dz-api/topics/prod.vm.logs-topic
+    compression: gzip
+
+    # The standard exporterhelper backoff. NOTE THE KEY: `retry_on_failure`,
+    # not the `retry` that the Elasticsearch exporter used.
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 60s
+      # Give up after 5 minutes rather than holding a growing in-memory queue
+      # against a destination that is not coming back.
+      max_elapsed_time: 300s
+
+    sending_queue:
+      enabled: true
+      # IN MEMORY, NOT ON DISK. A persistent queue needs the file_storage
+      # extension, and durable buffering is a job for a gateway collector — see
+      # build-docs/ops-execution.md. The cost of that choice: logs buffered here
+      # are lost if the VM restarts while the destination is down.
+      queue_size: 1000
+
+  googlecloudpubsub/metrics:
+    topic: projects/dz-api/topics/prod.vm.metrics-topic
+    compression: gzip
+
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 60s
+      max_elapsed_time: 300s
+
+    sending_queue:
+      enabled: true
+      # Smaller than the logs queue on purpose: one scrape every 60s cannot
+      # build the backlog a busy filelog tail can, and both queues are charged
+      # against the same memory_limiter.
+      queue_size: 200
+
+service:
+  # NO `extensions:` KEY EITHER — see the header. Adding health_check back here
+  # and under processors/exporters is all it would take to make a real health check
+  # possible again.
+  pipelines:
+    # -------------------------------------------------------------------------
+    # LOGS. memory_limiter is first and batch is last in each pipeline — the
+    # first so a spike is dropped rather than taking the host's memory with it,
+    # the last so nothing that might drop or modify a record runs after
+    # batching.
+    # -------------------------------------------------------------------------
+    logs/journal:
+      receivers: [journald]
+      processors: [memory_limiter, resourcedetection, resource/host, resource/journal, batch]
+      exporters: [googlecloudpubsub/logs]
+
+    # Both sites land here. Nothing separates them yet: no deploy script sets
+    # `access_log`, so every site writes to the default /var/log/nginx/*.log.
+    # Give them their own access_log paths before treating this as one site's.
+    logs/nginx:
+      receivers: [filelog/nginx]
+      processors: [memory_limiter, resourcedetection, resource/host, resource/nginx, batch]
+      exporters: [googlecloudpubsub/logs]
+
+    # -------------------------------------------------------------------------
+    # METRICS. One pipeline, one topic, separate from logs.
+    # -------------------------------------------------------------------------
+    metrics/host:
+      receivers: [hostmetrics]
+      processors: [memory_limiter, resourcedetection, resource/host, resource/systemetrics, batch]
+      exporters: [googlecloudpubsub/metrics]
+
+  telemetry:
+    logs:
+      # The collector's own logs land in the journal under its unit — and are
+      # then picked up by the journald receiver above, so they reach Pub/Sub as
+      # service.name=journal. This is also where an EACCES on a log source
+      # appears, once, at startup:
+      #   sudo journalctl -u otelcol -b
+      level: info

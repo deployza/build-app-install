@@ -1,0 +1,18 @@
+---
+# The repo root (build-app-install/), two levels above playbooks/. The playbooks
+# and the scripts they push are one checkout and one commit.
+app_src_root: "{{ playbook_dir }}/../.."
+
+# Must match STAGE_ROOT in vm/common.sh. The tree lands in repo/; each app stages
+# into its own sibling ${STAGE_ROOT}/<APP_NAME>/, which this role must not touch.
+stage_root: /tmp/deployza
+repo_dir: "{{ stage_root }}/repo"
+
+# Shared by every VM: the constants, the unit runner, the otel installer and the
+# off-switch config. The host's own vm/<inventory_hostname>/ folder is added to
+# these when it exists.
+vm_push_shared:
+  - vm/common.sh
+  - vm/units.sh
+  - vm/install-otel.sh
+  - vm/inert.yaml

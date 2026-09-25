@@ -1,42 +1,35 @@
 # vm/common.sh — constants shared by every VM deploy script under this folder.
 #
-# IT SITS AT THE vm/ ROOT, above the three layer folders. vm/ is organised by
-# LAYER, not by product:
+# IT SITS AT THE vm/ ROOT, above one folder per VM. vm/ is organised by HOST:
 #
-#   vm/apps/<app>/<app>.sh          install one app
-#   vm/apps/<app>/receiver.yaml     what that app writes, when it writes
-#                                   somewhere no system fragment reaches
-#                                   (assess-server only, today)
-#   vm/systems/<server>.yaml        what a given server writes — RECEIVERS ONLY
-#   vm/systems/_base.yaml           journald + hostmetrics; every host, always
-#   vm/instances/<vm>/install.sh    install everything one HOST runs
-#   vm/instances/<vm>/exporter.yaml that host's processors AND exporters
-#   vm/instances/<vm>/pipeline.yaml that host's service graph — one pipeline
-#                                   per service, hand-written
+#   vm/<vm>/install.sh      run every unit this host has, in order — or any of
+#                           them: `install.sh production assess-exam`
+#   vm/<vm>/<app>.sh        ONE UNIT: install one app on this host
+#   vm/<vm>/otel.yaml       this host's COMPLETE collector config — receivers,
+#                           processors, exporters, service
+#   vm/install-otel.sh      ONE UNIT (`otel`): validate, swap in, restart and
+#                           verify vm/<vm>/otel.yaml; roll back on failure
+#   vm/units.sh             the runner every install.sh sources
+#   vm/inert.yaml           collect nothing, send nowhere (hosts with no folder)
 #
-# THE OTEL SPLIT IS RECEIVERS VS EVERYTHING ELSE. apps/ and systems/ say what a
-# piece of software writes and where — true on every host that runs it.
-# instances/ says what one host does with it, because a VM runs ONE collector
-# with ONE config.yaml and therefore one set of resource attributes and exactly
-# one destination. vm/otel/push.sh assembles the two.
+# An app that ran on two hosts would have a copy of its script in each folder.
+# None does today.
 #
 # There is exactly ONE common.sh for all of them: these values are owned by the
 # infrastructure, not by an app, so a bucket change stays a single edit.
 #
-# NOT EXECUTABLE, NOT A DEPLOY SCRIPT. It is sourced (never run) by each
-# vm/apps/<app>/<app>.sh, relative to that script's own directory:
+# NOT EXECUTABLE, NOT A DEPLOY SCRIPT. It is sourced (never run), one level up
+# from the sourcing script's own directory:
 #
 #   readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-#   source "${SCRIPT_DIR}/../../common.sh"
+#   source "${SCRIPT_DIR}/../common.sh"      # from vm/<vm>/
 #
-# THE PUSHER MUST SHIP THE WHOLE vm/ TREE, not a single script and not a single
-# folder: this file has to be two levels above the app that sources it, and
-# vm/instances/<vm>/install.sh reaches sideways into vm/apps/. A push that copied only
-# <APP_NAME>.sh would break at the `source` line. (Before 2026-09-24 a baked boot launcher cloned the whole
-# repo, which satisfied this for free; it is now the pusher's job.)
+# THE PUSHER MUST SHIP THIS FILE WITH THE VM FOLDER: an app script copied on its
+# own breaks at the `source` line. ansible/roles/vm_push ships vm/common.sh,
+# vm/units.sh, vm/install-otel.sh, vm/inert.yaml and vm/<vm>/ together.
 #
 # THERE IS A SECOND COPY AT docker/common.sh, and that is deliberate: each
-# platform folder is self-contained, the same way vm/apps/<app>/<app>.sh and
+# platform folder is self-contained, the same way vm/<vm>/<app>.sh and
 # docker/<app>.sh are separate copies rather than one script behind a flag
 # (CLAUDE.md, "vm/ vs. docker/"). The price is that GCS_BASE_URL and STAGE_ROOT
 # appear in both files — CHANGE THE BUCKET IN BOTH OR THE TWO PLATFORMS PULL
@@ -52,11 +45,9 @@
 # DEFAULT_WEB_ROOT (/var/www/app for per-PATH apps, /var/www/site for per-HOST
 # sites). Those stay in the script that owns them.
 #
-# Everything here is `readonly`: each deploy script is its own `bash` process
-# (a instances/<vm>/install.sh orchestrator runs children via `bash <child>`),
-# so the file is sourced exactly once per process and a re-source cannot
-# collide. The orchestrators themselves do not source this — they deploy
-# nothing, they only invoke the children.
+# Everything here is `readonly`: each unit is its own `bash` process (units.sh
+# runs each via `bash <script>`), so the file is sourced exactly once per
+# process and a re-source cannot collide. install.sh itself does not source it.
 
 # --- Artifact store -----------------------------------------------------------
 # Base GCS location holding per-environment release artifacts. Each app's
