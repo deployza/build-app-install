@@ -37,7 +37,7 @@ One script per app **per platform**:
 ```
 build-ops/
 ├── vm/                    # organised by HOST — one folder per VM
-│   ├── mcp/               # collects nothing: install-otel.sh + inert.yaml only
+│   ├── mcp-vm/            # host `mcp`: the mcp unit (mcp.sh + payload in mcp/); otel inert
 │   └── <vm>/              # ziniapps-vm/, deployza-vm/ — SELF-CONTAINED, nothing shared
 │       ├── install.sh     #   UNITS, in order; run all or any: install.sh <env> [unit...]
 │       ├── <app>.sh       #   one unit per app this host runs
@@ -127,9 +127,9 @@ no placeholders and no render step.
   unless an `instance` file in the folder names it (`vm/mcp-vm/` is host `mcp`;
   its inventory entry sets `vm_dir: mcp-vm` to match). `--inert` installs the
   folder's `inert.yaml` instead (the off switch).
-- **Every host has a folder**, even one that collects nothing: `vm/mcp-vm/` holds
-  only `install-otel.sh`, `inert.yaml` and `instance`, and installs `inert.yaml`
-  because there is no `otel.yaml`. `vm_push` refuses a host with no folder.
+- **Every host has a folder**, even one that collects nothing: `vm/mcp-vm/` has
+  no `otel.yaml`, so its `otel` unit installs `inert.yaml`. `vm_push` refuses a
+  host with no folder.
 - **There is no `docker/` counterpart, deliberately.** Containers log to stdout
   and the runtime collects it.
 
@@ -204,6 +204,14 @@ Apps today: **`assess-server`**, **`assess-ui`**, **`assess-exam`**,
 **`www-website`** (per-host). `ziniapps-vm` runs the three assess apps and both
 ziniapps sites (plus `hundi-ui`, present but never deployed); `deployza-vm` runs
 `www-website` + `www-apidocs`, the two halves of the www.deployza.com host.
+
+**`mcp` is neither model.** It is the only app with no Tomcat and no nginx: it
+installs the Deployza MCP server (graphify + the OAuth gateway + the hourly
+refresh) as systemd units into the venv the `mcp` image bakes. Its payload —
+units, helpers, `mcp.env`, two Python modules — sits in `vm/mcp-vm/mcp/` and
+is installed verbatim; it reads nothing from GCS, so `APP_ENV` selects nothing,
+as with `www-apidocs`. It runs pre-flight checks against the baked venv before
+it replaces anything. See the header of `vm/mcp-vm/mcp.sh`.
 
 ## The deploy contract
 

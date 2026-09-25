@@ -1,0 +1,49 @@
+[Unit]
+Description=MCP knowledge-graph refresh - fetch changed repos, rescan, merge
+After=network-online.target
+Wants=network-online.target
+
+# Writes the clones, the graphs and the watermark, all on the data disk.
+Requires=mcp-boot.service
+After=mcp-boot.service
+
+# No liveness check can tell a current graph from a stale one — /healthz proves
+# both processes are up and nothing more — so a failed refresh is the signal worth
+# alerting on. See mcp-log-failure.
+OnFailure=mcp-refresh-failed.service
+
+[Service]
+Type=oneshot
+User=mcp
+Group=mcp
+EnvironmentFile=/etc/mcp/mcp.env
+Environment=HOME=/data/mcp
+
+# Keep gcloud's credential cache and logs off the data disk. /data IS writable for
+# this unit (unlike mcp.service), so this is hygiene rather than a fix —
+# but it keeps both units behaving identically and stops gcloud littering the
+# volume that holds the graph.
+Environment=CLOUDSDK_CONFIG=/tmp/gcloud
+
+ExecStart=/usr/local/bin/mcp-refresh
+
+# THE IMPORTANT LINE. `global add` loads, merges and rewrites the ENTIRE global
+# graph on every call, so three copies are live at peak — this is the
+# memory-hungry half of the system, and the server is the half that must stay up.
+# Capping the refresh guarantees that an overrun kills the refresh, never the
+# server: without it the kernel's OOM killer picks its own victim on a 1 GB box,
+# and the server is the larger, longer-lived process.
+#
+# Measured headroom: 72 MB peak across 22 repos, ~300 MB projected at ~200.
+# Re-measure at 50 repos before assuming that projection holds — the sample mean
+# is 219 KB per repo but framework-spring alone is 1.45 MB.
+MemoryMax=600M
+
+# Serving wins any CPU contention on the shared-core e2-micro.
+CPUWeight=20
+
+# NOT NoNewPrivileges=true, unlike mcp.service: this unit ends by
+# calling `sudo systemctl restart mcp.service`, and sudo is setuid — the flag
+# would break exactly that one line. The sudoers rule permits that single
+# command and nothing else.
+PrivateTmp=true

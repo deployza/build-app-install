@@ -1,0 +1,24 @@
+[Unit]
+Description=Hourly MCP knowledge-graph refresh
+
+[Timer]
+# First run shortly after boot. On a fresh VM this is what produces the very
+# first graph and lets mcp.service stop crash-looping; 2 minutes gives
+# the boot script time to mount /data and Cloud NAT time to come up.
+OnBootSec=2min
+
+# Hourly thereafter, measured from the end of the last run rather than on a wall
+# clock, so a long run never overlaps the next.
+#
+# Hourly is a deliberate choice: a developer who refactors something and
+# immediately asks about it should not get yesterday's answer. It is affordable
+# only because the refresh is gated — a quiet hour costs one GitHub API call and
+# nothing else.
+OnUnitActiveSec=1h
+
+# Catch up a run missed while the VM was stopped, instead of waiting a full hour
+# after it comes back.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

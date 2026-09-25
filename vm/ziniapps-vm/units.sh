@@ -67,8 +67,15 @@ run_units() {
   esac
   [[ "$(id -u)" -eq 0 ]] || _units_die "must run as root (use sudo)"
 
+  # The host is the folder name, or the `instance` file beside it when the two
+  # differ (vm/mcp-vm/ is host `mcp`) — the same rule install-otel.sh applies,
+  # which refuses a --vm that disagrees with it.
   local vm_dir="$SCRIPT_DIR" vm
-  vm="$(basename "$SCRIPT_DIR")"
+  if [[ -f "${SCRIPT_DIR}/instance" ]]; then
+    vm="$(tr -d '[:space:]' < "${SCRIPT_DIR}/instance")"
+  else
+    vm="$(basename "$SCRIPT_DIR")"
+  fi
 
   # Expand the selection: nothing means UNITS; `apps` means UNITS minus otel.
   local -a selected=()

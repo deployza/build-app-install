@@ -1,0 +1,28 @@
+#!/bin/bash
+# GIT_ASKPASS helper — feeds the read-only GitHub PAT to git without it ever
+# reaching argv, the filesystem, or a clone's .git/config.
+#
+# Installed to /usr/local/bin/mcp-git-askpass by build-ops/vm/mcp-vm/mcp.sh.
+# mcp-refresh exports GITHUB_PAT and points GIT_ASKPASS here; git then invokes this once per prompt,
+# passing the prompt text ("Username for 'https://github.com': ") as $1.
+#
+# WHY NOT THE OBVIOUS THING. Embedding the token in the clone URL —
+# https://x-access-token:<pat>@github.com/org/repo.git — is the usual shortcut and
+# it leaks twice: the URL lands in the process command line where any local user's
+# `ps` can read it, and git then PERSISTS it into <clone>/.git/config, so the
+# token ends up written to the data disk in ~200 places. An askpass helper keeps
+# it in one process's environment and nowhere else.
+#
+# NO `set -x` — see gcp-secret. This script prints the secret.
+set -euo pipefail
+
+case "$1" in
+    Username*)
+        # Any non-empty username works with a PAT; GitHub authenticates on the
+        # password field. x-access-token is GitHub's documented placeholder.
+        printf 'x-access-token\n'
+        ;;
+    *)
+        printf '%s\n' "${GITHUB_PAT:?GITHUB_PAT is not set — mcp-refresh must export it}"
+        ;;
+esac

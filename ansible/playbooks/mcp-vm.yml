@@ -1,18 +1,24 @@
 ---
 # mcp-vm — the MCP server in dz-builds, inventory host `mcp`, folder vm/mcp-vm/.
 #
-# ONE UNIT: otel. vm/mcp-vm/ holds no app scripts, so nothing in this repo installs
-# an app here, and vm/mcp-vm/install-otel.sh installs vm/mcp-vm/inert.yaml — collect nothing,
-# send nowhere — through the same validate, swap, restart and settle as a real
-# config. It still adds otelcol to its groups and asserts the backup slot.
+# TWO UNITS, in vm/mcp-vm/install.sh's order:
+#
+#   mcp    the app: graphify's units, the OAuth gateway, the refresh, mcp.env.
+#          The dz-mcp image bakes only the venv they run in, so a VM freshly
+#          booted from it serves NOTHING until this has run — run it as the
+#          last step of a VM replacement (build-terraform/dz-builds/mcp.md).
+#   otel   installs vm/mcp-vm/inert.yaml — collect nothing, send nowhere —
+#          through the same validate, swap, restart and settle as a real config.
 #
 # Give it vm/mcp-vm/otel.yaml when it needs to ship logs; this playbook needs no
 # change for that.
 #
-#   ansible-playbook playbooks/mcp-vm.yml
+#   ansible-playbook playbooks/mcp-vm.yml                # both
+#   ansible-playbook playbooks/mcp-vm.yml --tags mcp     # a code or mcp.env change
 - name: mcp
   hosts: mcp
   become: true
   roles:
     - { role: vm_push, tags: [always] }
+    - { role: vm_unit, unit: mcp, tags: [apps, mcp] }
     - { role: vm_unit, unit: otel, tags: [otel] }

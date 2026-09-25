@@ -1,0 +1,45 @@
+#!/bin/bash
+# mcp-serve — start the graphify MCP server in the foreground.
+#
+# Installed to /usr/local/bin/mcp-serve by build-ops/vm/mcp-vm/mcp.sh; ExecStart
+# of mcp.service.
+#
+# Its whole reason to exist is the API key. graphify accepts either --api-key or
+# the GRAPHIFY_API_KEY environment variable. The flag would put the key in the
+# process command line, where any local user's `ps` reads it; this wrapper fetches
+# the key from Secret Manager into a shell variable, exports it, and exec's the
+# server — so the key is never written to disk and never appears in argv.
+#
+# `exec` matters: the server replaces this shell, so systemd supervises the real
+# process rather than a parent that would swallow its signals and exit status.
+#
+# NO `set -x` — this script handles the secret. See gcp-secret.
+set -euo pipefail
+
+source /etc/mcp/mcp.env
+
+GRAPHIFY_API_KEY="$(/usr/local/bin/gcp-secret "$MCP_API_KEY_SECRET")"
+export GRAPHIFY_API_KEY
+
+# --stateless: every request is self-contained, so neither the load balancer nor the
+# gateway has to pin a client to a session. It is also what lets mcp-auth reuse one
+# upstream session instead of re-doing the MCP handshake on every call.
+#
+# --host WAS 0.0.0.0 AND IS NOT ANY MORE. This process used to be what the load
+# balancer talked to, so binding the wildcard was mandatory. The OAuth gateway now
+# holds :8080 and this listens on $MCP_BIND (127.0.0.1:8081), reachable only from
+# the gateway on the same box. Do not "fix" this back to 0.0.0.0 — it would
+# re-expose an endpoint whose only authentication is a static key that is now shared
+# with nobody and rotated by nobody.
+#
+# On a fresh VM the graph does not exist yet and this exits non-zero. That is
+# expected and handled: mcp.service carries Restart=always, so the unit
+# retries until the first mcp-refresh run produces a graph, then comes up on
+# its own. No manual step, and no ordering dependency between the two units.
+exec "$MCP_VENV/bin/python" -m graphify.serve \
+    --graph "$MCP_GRAPH" \
+    --transport http \
+    --host "$MCP_BIND" \
+    --port "$MCP_PORT" \
+    --path "$MCP_HTTP_PATH" \
+    --stateless

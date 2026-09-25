@@ -1,0 +1,40 @@
+#!/bin/bash
+# mcp-log-failure — write one ERROR entry to Cloud Logging when a refresh
+# run fails. OnFailure= target of mcp-refresh.service.
+#
+# WHY THIS EXISTS. The load balancer's health check proves the processes are up,
+# not that the graph is CURRENT — it is an HTTP check on the gateway's /healthz,
+# which also probes graphify, but a server happily serving a three-week-old graph
+# still looks perfectly healthy. Staleness is invisible to any liveness check by
+# definition. The refresh failing is therefore the signal that actually matters,
+# and the most likely cause is mundane: GitHub
+# caps fine-grained PATs at one year, and when ours lapses every run starts
+# failing while the service keeps answering with a frozen graph.
+#
+# The Ops Agent is deliberately NOT installed on this VM (it would spend memory
+# that the 1 GB e2-micro budget does not have to spare), so journald does not
+# reach Cloud Logging on its own. This writes the one entry that matters directly
+# through the Logging API instead, using the VM service account's
+# roles/logging.logWriter.
+#
+# TO ALERT ON IT: create a log-based alerting policy in Cloud Monitoring for
+#   logName="projects/<project>/logs/mcp-refresh" AND severity>=ERROR
+# That policy is not codified in Terraform yet — see the open items in
+# build-terraform/builds/mcp-tracker.md.
+set -euo pipefail
+
+project="$(curl -fsS --max-time 5 -H 'Metadata-Flavor: Google' \
+    http://metadata.google.internal/computeMetadata/v1/project/project-id)"
+
+instance="$(curl -fsS --max-time 5 -H 'Metadata-Flavor: Google' \
+    http://metadata.google.internal/computeMetadata/v1/instance/name)"
+
+# The message names PAT expiry as ONE candidate, not a diagnosis — this script
+# cannot see why the run failed, only that it did. Naming a single "most likely
+# cause" was actively misleading the first time this fired: the real cause was
+# elsewhere and the hint sent the reader down the wrong path. Point at the log
+# instead, and list candidates as candidates.
+gcloud logging write mcp-refresh \
+    "mcp-refresh.service FAILED on ${instance}. The knowledge graph is going stale. Read the actual error before assuming a cause - the run's output is on the serial console (gcloud compute instances get-serial-port-output ${instance}) and in 'journalctl -u mcp-refresh.service -n 100'. Candidates: expired GitHub PAT (github-readonly-pat), Secret Manager unreachable, the VM's external IP gone so github.com is unreachable, or the run exceeding MemoryMax=600M." \
+    --severity=ERROR \
+    --project="$project"

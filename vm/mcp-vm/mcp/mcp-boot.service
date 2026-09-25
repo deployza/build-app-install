@@ -1,0 +1,23 @@
+[Unit]
+Description=MCP per-instance boot provisioning (data area, swap, service home)
+Documentation=file:///usr/local/bin/mcp-boot
+
+# Runs after the root filesystem is up, before anything that needs /data.
+After=local-fs.target
+DefaultDependencies=yes
+
+[Service]
+Type=oneshot
+
+# The unit stays "active (exited)" after the script returns, so the Requires= on
+# mcp.service and mcp-refresh.service is satisfied for the rest of
+# the boot rather than being re-triggered per consumer.
+RemainAfterExit=yes
+
+ExecStart=/usr/local/bin/mcp-boot
+
+# Formats and mounts a disk and edits fstab — root, and no sandboxing.
+User=root
+
+[Install]
+WantedBy=multi-user.target

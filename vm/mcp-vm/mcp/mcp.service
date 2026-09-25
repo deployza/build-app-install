@@ -1,0 +1,71 @@
+[Unit]
+Description=Deployza MCP code-knowledge-graph server, Streamable HTTP on 127.0.0.1:8081/mcp (graphify)
+Documentation=https://github.com/Graphify-Labs/graphify
+After=network-online.target
+Wants=network-online.target
+
+# The graph and the service user's HOME both live on the data disk, which
+# mcp-boot mounts. Requires= (not Wants=) because there is nothing useful
+# this server can do without it: if the disk cannot be mounted, failing to start
+# is the correct outcome, not serving an empty or boot-disk graph.
+Requires=mcp-boot.service
+After=mcp-boot.service
+
+[Service]
+Type=simple
+User=mcp
+Group=mcp
+EnvironmentFile=/etc/mcp/mcp.env
+
+# systemd derives HOME from the account, but graphify's `global add` depends on
+# Path.home() resolving onto the data disk, so it is stated explicitly rather
+# than inherited.
+Environment=HOME=/data/mcp
+
+# gcloud WRITES to its config directory — a credentials cache and a log file —
+# and defaults it to $HOME/.config/gcloud. With HOME on the read-only /data below,
+# `gcp-secret` died on every start:
+#
+#   ERROR: (gcloud.secrets.versions.access) Unable to create private file
+#   [/data/mcp/.config/gcloud/credentials.db]: [Errno 30] Read-only file system
+#
+# Pointing it at /tmp fixes that without loosening the sandbox: PrivateTmp=true
+# gives this unit its own tmpfs, so the cached token lives in memory, is invisible
+# to every other process, and is destroyed on restart. Better than a real
+# directory, not a concession.
+Environment=CLOUDSDK_CONFIG=/tmp/gcloud
+
+ExecStart=/usr/local/bin/mcp-serve
+
+# On a fresh VM there is no graph yet and this exits immediately. That is the
+# designed path, not a fault: the unit retries until the timer's OnBootSec=2min
+# fires the first refresh and produces a graph, then stays up. It also covers the
+# ~2 s restart the refresh triggers when the graph changes.
+Restart=always
+RestartSec=30
+
+# Serving wins any CPU contention on the shared-core e2-micro, against
+# mcp-refresh.service's CPUWeight=20.
+#
+# THIS IS THE FIX FOR A MEASURED OUTAGE, not a precaution. On 2026-08-27 a full
+# 165-repo re-index exhausted the e2-micro's burst credits for 13.5 minutes; the
+# server stayed alive the whole time but was too starved to answer the load
+# balancer's health check, so the LB dropped it and mcp.deployza.com returned 000.
+# See build-terraform/docs/mcp.md §12. Under cgroup v2 this is one line per unit.
+CPUWeight=1000
+
+# The process reads two things (the graph, and the key from Secret Manager) and
+# writes nothing, so it gets a read-only view of the filesystem. ProtectHome is
+# safe here precisely because this service's "home" is /data/mcp, which is
+# not under /home.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadOnlyPaths=/data
+
+[Install]
+WantedBy=multi-user.target

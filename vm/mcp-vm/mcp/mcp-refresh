@@ -1,0 +1,289 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# mcp-refresh — bring the knowledge graph up to date.
+#
+# "Knowledge graph", not "code knowledge graph": each repo contributes both its
+# code (tree-sitter AST) and its Markdown (graphify's own tokenless Markdown
+# extractor, via mcp-md-graph). See scan_repo.
+#
+# Installed to /usr/local/bin/mcp-refresh by build-ops/vm/mcp-vm/mcp.sh; ExecStart
+# of mcp-refresh.service, fired hourly by mcp-refresh.timer.
+#
+# Hourly is affordable only because of two gates that make the common case a
+# no-op:
+#
+#   Gate 1 — ASK GITHUB BEFORE FETCHING ANYTHING. One API call lists the org's
+#            repos sorted by pushed_at; only repos pushed since the last
+#            successful run are fetched and rescanned. Without this, every run
+#            costs ~200 `git fetch` round trips — minutes of wall time and burst
+#            credit on a shared-core e2-micro. With it, a quiet hour costs one
+#            API call and nothing else.
+#
+#   Gate 2 — RESTART ONLY IF THE GRAPH ACTUALLY CHANGED. The server reads the
+#            graph into memory at startup and holds it, so a restart is the only
+#            way to pick up a new one — and it costs ~2 s of 503. That is the one
+#            user-visible cost of a refresh; there is no reason to pay it when
+#            nothing moved.
+#
+# A third gate comes free from upstream: `global add` short-circuits on an
+# unchanged source_hash BEFORE loading the global graph, so even a repo that was
+# fetched but whose graph is byte-identical costs a manifest read and one sha256,
+# not the load-merge-rewrite cycle.
+#
+# Logs land in the journal under the unit:
+#   sudo journalctl -u mcp-refresh.service -f
+#
+# NO `set -x`. This script holds the GitHub PAT in its environment, and a traced
+# line would copy it into the journal. See gcp-secret.
+# -----------------------------------------------------------------------------
+set -euo pipefail
+
+source /etc/mcp/mcp.env
+
+log() { echo "[mcp-refresh] $*"; }
+
+# =============================================================================
+# Functions
+# =============================================================================
+
+# gh_api <url>: one authenticated GitHub REST call, body to stdout.
+gh_api() {
+    curl -fsS --max-time 30 \
+        -H "Authorization: Bearer ${GITHUB_PAT}" \
+        -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" \
+        "$1"
+}
+
+# changed_repos: print the names of repos pushed since $SINCE, one per line.
+#
+# Results are requested sorted by pushed_at DESCENDING, which is what makes the
+# early exit sound: once the oldest entry on a page is at or below the watermark,
+# every later page is older still and cannot contain a changed repo. In the
+# steady state that means exactly one API call per run.
+#
+# An empty $SINCE (first run, or the state file was cleared) selects everything.
+changed_repos() {
+    local page=1 body count oldest
+
+    while :; do
+        body="$(gh_api "https://api.github.com/orgs/${MCP_GITHUB_ORG}/repos?per_page=100&page=${page}&sort=pushed&direction=desc")"
+        count="$(jq 'length' <<<"$body")"
+        [[ "$count" -eq 0 ]] && break
+
+        # pushed_at is ISO 8601 UTC with a fixed width, so a lexical comparison
+        # is a chronological one. Archived and disabled repos are skipped: they
+        # cannot change again, so indexing them is pure cost.
+        jq -r --arg since "$SINCE" '
+            .[]
+            | select(.archived | not)
+            | select(.disabled | not)
+            | select($since == "" or .pushed_at > $since)
+            | .name
+        ' <<<"$body"
+
+        oldest="$(jq -r '.[-1].pushed_at' <<<"$body")"
+        if [[ -n "$SINCE" && ! "$oldest" > "$SINCE" ]]; then
+            break
+        fi
+        [[ "$count" -lt 100 ]] && break
+        page=$((page + 1))
+    done
+}
+
+# exclude_filter: drop the repos named in MCP_EXCLUDE_REPOS.
+# grep exits 1 when it emits nothing, which is a normal outcome here, so the
+# status is swallowed rather than tripping `set -e`.
+exclude_filter() {
+    if [[ -z "${MCP_EXCLUDE_REPOS// /}" ]]; then
+        cat
+    else
+        grep -vxF -f <(printf '%s\n' $MCP_EXCLUDE_REPOS) || true
+    fi
+}
+
+# sync_repo <name>: shallow-clone on first sight, otherwise fast-forward to the
+# remote head. Kept at depth 1 throughout — graphify parses the working tree, so
+# history is dead weight across ~200 repos.
+sync_repo() {
+    local repo="$1" dir="${MCP_REPOS}/${repo}"
+
+    if [[ -d "${dir}/.git" ]]; then
+        git -C "$dir" fetch --depth 1 origin HEAD
+        git -C "$dir" reset --hard FETCH_HEAD
+        # Clear anything left over from a previous scan, but KEEP graphify-out/:
+        # upstream writes it INTO the scanned repo, not into the working
+        # directory, and the next step reads graph.json back out of it.
+        git -C "$dir" clean -fdx -e graphify-out
+    else
+        git clone --depth 1 \
+            "https://github.com/${MCP_GITHUB_ORG}/${repo}.git" "$dir"
+    fi
+}
+
+# scan_repo <name>: parse the tree and merge the result into the global graph.
+#
+# TWO PASSES, ONE graph.json. `graphify global add --as <repo>` REPLACES that
+# repo's whole subgraph, so code and docs must arrive in a single file:
+#
+#   1. graphify extract --code-only   tree-sitter AST over code files
+#   2. mcp-md-graph --merge      graphify's own Markdown extractor
+#   3. graphify global add            one merge, one node namespace
+#
+# --code-only is not an optimisation, it is what keeps this run free and offline.
+# graphify classifies Markdown as a *document*, and documents go through
+# LLM-based semantic extraction: without it a scan HARD-FAILS with "no LLM API
+# key found". --code-only skips documents deliberately instead of failing on
+# them, and everything left is tree-sitter AST parsing — deterministic, no
+# network, no per-token bill.
+#
+# Step 2 is what puts the Markdown back WITHOUT an LLM. graphify ships a
+# deterministic Markdown extractor that the CLI never reaches; mcp-md-graph
+# calls it directly, at zero tokens. Order is load-bearing: `graphify extract`
+# rewrites graph.json from scratch, so the Markdown pass must run AFTER it.
+# Reversing the two silently discards every doc node.
+#
+# A REPO WITH NO CODE IS NORMAL, NOT AN ERROR — and is no longer skipped.
+# `graphify extract` exits NON-ZERO when a repo yields an empty graph:
+#
+#   [graphify extract] graph is empty — extraction produced no nodes.
+#   [graphify extract] found 0 code, 0 docs, 0 papers, 0 images
+#
+# That is the expected outcome for a static-UI repo (no HTML or CSS grammar
+# exists, even under [all]), a config-only repo, or an empty one. Under
+# `set -e` a single such repo aborted the whole run — which is exactly what
+# happened to `billing-ui`, killing the refresh for every other repo, hourly,
+# indefinitely. The failure is per-repo, never per-run.
+#
+# It is now also not necessarily the end of the story: a docs-only repo fails
+# step 1 and still produces a real graph from step 2 (measured: `build-docs`,
+# 0 code files, 63 nodes and 75 edges from its Markdown alone). So a failed
+# extract is logged and the Markdown pass runs regardless; the decision to skip
+# is deferred to the node count at the end.
+scan_repo() {
+    local repo="$1" dir="${MCP_REPOS}/${repo}"
+    local graph="${dir}/graphify-out/graph.json"
+
+    if ! "$MCP_VENV/bin/graphify" extract "$dir" --code-only; then
+        log "  ${repo}: no code graph — trying Markdown only"
+    fi
+
+    # Never fatal on its own: a repo with no Markdown is the common case, and a
+    # code graph that is already written must still reach `global add`.
+    if ! "$MCP_VENV/bin/python" /usr/local/bin/mcp-md-graph \
+            "$dir" --merge; then
+        log "  ${repo}: Markdown pass failed — continuing with code nodes only"
+    fi
+
+    # The real gate, and it must count NODES rather than test the file. Step 2
+    # writes a well-formed graph.json even when it finds nothing, so `-s` now
+    # passes for a repo with no code and no docs — and `global add` would happily
+    # register a 0-node repo in the manifest.
+    if [[ ! -s "$graph" ]] || ! jq -e '(.nodes | length) > 0' "$graph" >/dev/null 2>&1; then
+        log "  ${repo}: graph has no nodes — skipped"
+        return 0
+    fi
+
+    "$MCP_VENV/bin/graphify" global add "$graph" --as "$repo"
+}
+
+# graph_digest: sha256 of the global graph, or empty if it does not exist yet.
+graph_digest() {
+    [[ -f "$MCP_GRAPH" ]] && sha256sum "$MCP_GRAPH" | cut -d' ' -f1 || true
+}
+
+# =============================================================================
+# Main
+# =============================================================================
+main() {
+    # Stamped BEFORE the API call, not after the run: anything pushed while this
+    # run is in flight must be picked up by the next one, not skipped.
+    local run_started before after
+    run_started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+    SINCE=""
+    [[ -f "$MCP_STATE" ]] && SINCE="$(cat "$MCP_STATE")"
+    log "watermark: ${SINCE:-<none> (first run — every repo will be indexed)}"
+
+    # Into process memory, never to disk. GIT_ASKPASS keeps it out of argv and
+    # out of each clone's .git/config; GIT_TERMINAL_PROMPT=0 makes an auth failure
+    # an immediate error instead of a hung prompt on a headless box.
+    GITHUB_PAT="$(/usr/local/bin/gcp-secret "$MCP_GITHUB_PAT_SECRET")"
+    export GITHUB_PAT
+    export GIT_ASKPASS=/usr/local/bin/mcp-git-askpass
+    export GIT_TERMINAL_PROMPT=0
+
+    # ---- Gate 1 ----------------------------------------------------------
+    local changed=()
+    mapfile -t changed < <(changed_repos | exclude_filter)
+
+    if [[ ${#changed[@]} -eq 0 ]]; then
+        log "no repos pushed since the watermark — no fetch, no scan, no restart"
+        echo "$run_started" > "$MCP_STATE"
+        return 0
+    fi
+
+    log "${#changed[@]} repo(s) to refresh: ${changed[*]}"
+    before="$(graph_digest)"
+
+    mkdir -p "$MCP_REPOS"
+
+    # ONE BAD REPO MUST NOT COST THE OTHER 199. Everything up to this point is
+    # structural — the secret fetch, the GitHub listing — and still aborts the run
+    # under `set -e`, because a failure there means the run cannot do its job at
+    # all. Inside the loop the opposite is true: a repo that was renamed, deleted
+    # mid-run, or simply has nothing parseable in it is a routine event on a
+    # ~200-repo org, and the graph should still be updated for everything else.
+    local repo failed=0
+    for repo in "${changed[@]}"; do
+        log "--- ${repo}"
+        if ! sync_repo "$repo"; then
+            log "  ${repo}: fetch/clone failed — skipped"
+            failed=$((failed + 1))
+            continue
+        fi
+        if ! scan_repo "$repo"; then
+            log "  ${repo}: merge failed — skipped"
+            failed=$((failed + 1))
+            continue
+        fi
+    done
+
+    if [[ $failed -gt 0 ]]; then
+        log "${failed} of ${#changed[@]} repo(s) were skipped (see above)"
+    fi
+
+    # The watermark advances even when some repos were skipped. Holding it back
+    # would make every future run retry the same unindexable repos forever and
+    # never record progress on the ones that did work.
+    echo "$run_started" > "$MCP_STATE"
+
+    # ---- Gate 2 ----------------------------------------------------------
+    #
+    # EXPECT ONE EXTRA RESTART PER CODE REPO when the Markdown pass first runs
+    # over an already-cloned tree, and exactly one. Measured over five
+    # consecutive runs on the same repo: the Markdown pass appends its nodes at
+    # the end of graph.json, which makes the NEXT `graphify extract` emit the
+    # same node set in a different order — same nodes, same edges, different
+    # bytes, therefore a different sha256 and a real `global add`. It converges
+    # on run 2 and the digest is then byte-identical on runs 3, 4 and 5. A
+    # docs-only repo is stable from run 1.
+    #
+    # So the first refresh after this ships costs a restart, the second costs one
+    # more, and the steady state is unchanged. Do not go looking for a bug in
+    # Gate 2 on that second run.
+    after="$(graph_digest)"
+    if [[ "$after" == "$before" ]]; then
+        log "global graph unchanged — skipping restart"
+        return 0
+    fi
+
+    # The restart happens ONCE, here, after the loop — never per repo. Needs root,
+    # which this unit does not run as; /etc/sudoers.d/mcp permits exactly
+    # this one command and nothing else.
+    log "global graph changed — restarting the MCP server (~2 s of 503)"
+    sudo -n /usr/bin/systemctl restart mcp.service
+    log "done"
+}
+
+main "$@"

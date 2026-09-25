@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+# -----------------------------------------------------------------------------
+# mcp-md-graph — add a repo's Markdown to its graph, with NO LLM.
+#
+# Installed to /usr/local/bin/mcp-md-graph by build-ops/vm/mcp-vm/mcp.sh; called
+# by mcp-refresh once per repo, immediately after `graphify extract --code-only` and before
+# `graphify global add`.
+#
+# WHY THIS EXISTS
+#
+# graphify already ships a deterministic Markdown extractor
+# (graphify/extractors/markdown.py). It produces page nodes, a heading `contains`
+# tree, cross-document `references` edges (inline links AND [[wikilinks]]), and
+# parses YAML frontmatter into node metadata. It reports
+# "input_tokens": 0, "output_tokens": 0 — no LLM, no network, no per-token bill.
+#
+# It is simply UNREACHABLE from the CLI, because three things line up:
+#
+#   1. detect.classify_file() sends `.md` to FileType.DOCUMENT
+#   2. the AST pass in cli.py runs over `code_files` only
+#   3. the `.md -> extract_markdown` entry in extract.py's _DISPATCH table is
+#      therefore never consulted
+#
+# So `graphify extract --code-only` skips every Markdown file in the org, and
+# `graphify extract` WITHOUT --code-only hard-fails asking for an LLM key. The
+# tokenless extractor that answers the question sits one import away. This script
+# calls it directly and writes graphify's own node-link graph.json, so
+# `graphify global add` takes the result unmodified.
+#
+# This is what closes the "docs/config repo" gap in §1 of
+# build-terraform/docs/mcp.md (sibling repo) — README
+# and docs/ content is now queryable alongside the code it describes.
+#
+# IDEMPOTENCE IS THE WHOLE DESIGN, AND IT IS NOT OPTIONAL
+#
+# `graphify global add --as <repo>` REPLACES that repo's entire subgraph, so code
+# nodes and doc nodes must arrive in ONE graph.json:
+#
+#     graphify extract <repo> --code-only     # writes graphify-out/graph.json
+#     mcp-md-graph <repo> --merge        # replaces the doc half of it
+#     graphify global add ... --as <repo>     # one merge, one namespace
+#
+# On the VM `graphify-out/` deliberately survives between runs (mcp-refresh
+# keeps it through `git clean -e graphify-out`), so every run after the first is a
+# WARM one: `graphify extract` reads back the graph.json this script last wrote.
+# An earlier append-only version was measured over repeated runs on one tree:
+#
+#   code repo    doc nodes survived, but every doc edge was appended a second
+#                time — 330 -> 344 links, 14 duplicates, on every single run
+#   docs-only    extract rewrote the graph MINUS one of our nodes (63 -> 62),
+#                then the re-merge produced 146 links, 69 of them duplicates
+#
+# Appending is wrong in both directions: it duplicates edges, and it cannot heal
+# a node that extract dropped. So every node and edge written here carries the
+# `_md_graph` tag; --merge DROPS everything carrying that tag and rebuilds it from
+# the tree. The output is identical however many times it runs, and whatever the
+# previous run left behind. Verified stable across three consecutive runs on both
+# repo shapes, on graphify 0.9.48 and 0.9.50.
+#
+# Usage:
+#     mcp-md-graph <repo>            # fresh graph.json from Markdown only
+#     mcp-md-graph <repo> --merge    # replace the Markdown half of one
+#
+# Must be run with the graphify venv's python:
+#     /opt/mcp/venv/bin/python /usr/local/bin/mcp-md-graph <repo> --merge
+# -----------------------------------------------------------------------------
+"""Structural Markdown -> graphify graph, without an LLM backend."""
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+# The extractor is VENDORED (mcp_md_extract.py, beside this file), not
+# imported from the installed graphify. See that file's header for why. It has no
+# graphify dependency at all, so this script needs the venv only for --self-test.
+#
+# NOTE ON FRONTMATTER: PyYAML is NOT installed in the graphify venv (checked
+# 2026-08-27 — graphify does not declare it), so the extractor falls back to its
+# flat `key: value` parser. Nested frontmatter blocks and list structure are
+# dropped; scalars survive. That is unchanged from importing the library — the
+# same fallback ran there — and it is why nothing here depends on `yaml`.
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+try:
+    from mcp_md_extract import extract_markdown, clear_link_index_cache
+except ImportError as exc:
+    sys.exit(f"mcp_md_extract.py must sit beside this script: {exc}")
+
+
+# Marks everything this script owns, so a re-run can identify and replace its own
+# previous output without touching a single node `graphify extract` produced.
+OWNED = "_md_graph"
+
+
+def build(root: Path, merge: bool) -> tuple[int, int, int, int]:
+    out_dir = root / "graphify-out"
+    out_dir.mkdir(exist_ok=True)
+    out_file = out_dir / "graph.json"
+
+    # The scan root enables the vault-global [[wikilink]] fallback. Upstream
+    # smuggles this through a module global; the vendored extractor takes it as
+    # an argument. Measured on build-docs, lib-lang and build-terraform: passing
+    # it changes nothing, because none of them use Obsidian-style wikilinks. It
+    # is passed anyway so a repo that adopts them later just works.
+    clear_link_index_cache()
+
+    # _file_stem() encodes whatever path it is handed, so node ids must be built
+    # from REPO-RELATIVE paths. Hand it an absolute one and every id in the graph
+    # carries /data/repos/... in it. The real `graphify extract` fixes this in an
+    # id-remap post-pass that we do not have, so relativise up front.
+    os.chdir(root)
+
+    if merge and out_file.exists():
+        graph = json.loads(out_file.read_text(encoding="utf-8"))
+    else:
+        graph = {"directed": False, "multigraph": False, "graph": {},
+                 "nodes": [], "links": [], "hyperedges": []}
+
+    # Drop this script's previous contribution before rebuilding it. Anything
+    # without the tag belongs to `graphify extract` and is left exactly as found.
+    stale = sum(1 for n in graph["nodes"] if n.get(OWNED))
+    graph["nodes"] = [n for n in graph["nodes"] if not n.get(OWNED)]
+    graph["links"] = [e for e in graph.get("links", []) if not e.get(OWNED)]
+
+    known = {n["id"] for n in graph["nodes"]}
+    new_nodes: list[dict] = []
+    edges: list[dict] = []
+
+    for md in sorted(p.relative_to(root) for p in root.rglob("*.md")):
+        if "graphify-out" in md.parts or ".git" in md.parts:
+            continue
+        result = extract_markdown(md, scan_root=root)
+        for node in result.get("nodes", []):
+            if node["id"] in known:
+                continue
+            known.add(node["id"])
+            node["_origin"] = "ast"
+            node[OWNED] = True
+            node["source_file"] = md.as_posix()
+            new_nodes.append(node)
+        for edge in result.get("edges", []):
+            edge["_origin"] = "ast"
+            edge[OWNED] = True
+            edge.setdefault("confidence_score", 1.0)
+            edge["source_file"] = md.as_posix()
+            edges.append(edge)
+
+    # A `references` edge to a page that does not exist is a broken link. Drop it
+    # rather than inventing a node for it — a phantom node would show up in every
+    # query as a real page that nobody can open. Repo docs link to `.tf` files,
+    # to sibling repos and to external URLs, so a double-digit drop count here is
+    # normal, not a defect.
+    kept = [e for e in edges if e["target"] in known]
+    dangling = len(edges) - len(kept)
+
+    # Two Markdown files can legitimately yield the same edge, and one file that
+    # links to the same page twice yields it twice. Collapse them so the count
+    # reported is the count written.
+    seen: set[tuple] = set()
+    unique: list[dict] = []
+    for edge in kept:
+        key = (edge.get("source"), edge.get("target"), edge.get("relation"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(edge)
+
+    graph["nodes"].extend(new_nodes)
+    graph["links"].extend(unique)
+    out_file.write_text(json.dumps(graph, indent=2), encoding="utf-8")
+    return len(new_nodes), len(unique), dangling, stale
+
+
+def self_test(root: Path) -> int:
+    """Diff the vendored extractor against the INSTALLED graphify on a real tree.
+
+    This is the guard that makes vendoring safe. mcp_md_extract.py is a
+    frozen copy; it does not move when the venv is upgraded, so without this
+    check a `GRAPHIFY_VERSION` bump could silently leave us on stale extraction
+    behaviour. Run it after any upgrade:
+
+        /opt/mcp/venv/bin/python /usr/local/bin/mcp-md-graph \
+            /data/repos/<some-repo> --self-test
+
+    Exits non-zero on ANY divergence in nodes or edges. A difference is not
+    automatically a failure — upstream may have fixed something worth taking —
+    but it must be looked at and the copy re-vendored or the difference recorded.
+    """
+    try:
+        from graphify.extractors.markdown import extract_markdown as lib_extract
+        import graphify.extract as gx
+    except ImportError as exc:
+        print(f"self-test needs the graphify venv's python: {exc}", file=sys.stderr)
+        return 2
+
+    # Upstream reads the scan root from this module global; mirror what we pass
+    # to the vendored copy so the two are compared on equal terms.
+    gx._XAML_ACTIVE_EXTRACT_ROOT = root
+    clear_link_index_cache()
+
+    cwd = os.getcwd()
+    os.chdir(root)
+    diffs, files = [], 0
+    try:
+        for md in sorted(p.relative_to(root) for p in root.rglob("*.md")):
+            if "graphify-out" in md.parts or ".git" in md.parts:
+                continue
+            files += 1
+            ours = extract_markdown(md, scan_root=root)
+            theirs = lib_extract(md)
+            for key in ("nodes", "edges"):
+                if ours.get(key) != theirs.get(key):
+                    diffs.append(f"{md.as_posix()}: {key} differ "
+                                 f"({len(ours.get(key, []))} ours vs "
+                                 f"{len(theirs.get(key, []))} theirs)")
+    finally:
+        os.chdir(cwd)
+
+    import importlib.metadata as md_meta
+    try:
+        version = md_meta.version("graphifyy")
+    except Exception:
+        version = "unknown"
+
+    if diffs:
+        print(f"DIVERGED from graphifyy {version} over {files} file(s):",
+              file=sys.stderr)
+        for d in diffs[:20]:
+            print(f"  {d}", file=sys.stderr)
+        if len(diffs) > 20:
+            print(f"  ... and {len(diffs) - 20} more", file=sys.stderr)
+        print("Re-vendor mcp_md_extract.py from this version, or record why "
+              "the difference is acceptable.", file=sys.stderr)
+        return 1
+
+    print(f"vendored extractor matches graphifyy {version} exactly "
+          f"over {files} file(s)")
+    return 0
+
+
+def main() -> int:
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if len(args) != 1:
+        return int(bool(sys.stderr.write(
+            "usage: mcp-md-graph <repo> [--merge | --self-test]\n")))
+
+    if "--self-test" in sys.argv:
+        root = Path(args[0]).resolve()
+        if not root.is_dir():
+            return int(bool(sys.stderr.write(f"not a directory: {root}\n")))
+        return self_test(root)
+    root = Path(args[0]).resolve()
+    if not root.is_dir():
+        return int(bool(sys.stderr.write(f"not a directory: {root}\n")))
+
+    nodes, edges, dangling, stale = build(root, "--merge" in sys.argv)
+    replaced = f", replaced {stale} from a previous run" if stale else ""
+    print(f"{nodes} doc nodes, {edges} doc edges, "
+          f"{dangling} dangling link(s) dropped{replaced}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

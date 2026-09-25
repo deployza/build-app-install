@@ -1,0 +1,67 @@
+[Unit]
+Description=Deployza MCP OAuth gateway (public :8080, proxies to graphify on :8081)
+Documentation=https://gofastmcp.com/servers/auth/oauth-proxy
+
+# THIS IS THE ONLY PUBLICLY REACHABLE PROCESS ON THE VM. graphify itself binds
+# 127.0.0.1 now, so if this unit is down the service is down — the load balancer's
+# health check hits /healthz here, not graphify.
+After=network-online.target
+Wants=network-online.target
+
+# The dynamic client registrations and the encrypted upstream tokens live under
+# /data/mcp/auth, which mcp-boot creates. Requires= rather than Wants=: starting
+# without that directory would mean issuing tokens that vanish on restart and
+# silently signing everyone out.
+Requires=mcp-boot.service
+After=mcp-boot.service
+
+# Ordering only, NOT a dependency. mcp.service crash-loops for the first ~2 minutes
+# of a brand-new VM's life while the first refresh builds a graph; this gateway must
+# still come up and answer /healthz with 503 during that window, so that the load
+# balancer sees a definite "not ready" instead of a dropped connection.
+After=mcp.service
+
+[Service]
+Type=simple
+User=mcp
+Group=mcp
+EnvironmentFile=/etc/mcp/mcp.env
+
+Environment=HOME=/data/mcp
+
+# gcloud writes a credential cache to $HOME/.config/gcloud, and $HOME is on the
+# read-only /data below. Same trap that crash-looped mcp.service 213 times on first
+# deployment (build-terraform/docs/mcp.md §12) — PrivateTmp gives this unit its own
+# tmpfs, so the cached token lives in memory and dies with the process.
+Environment=CLOUDSDK_CONFIG=/tmp/gcloud
+
+ExecStart=/usr/local/bin/mcp-auth
+
+Restart=always
+RestartSec=10
+
+# Serving wins any CPU contention on the shared-core e2-micro, matching
+# mcp.service. mcp-refresh.service carries CPUWeight=20 so that a full re-index
+# yields to serving instead of starving it — the outage diagnosed in §12.
+CPUWeight=1000
+
+# The gateway holds no graph: it validates a JWT, checks a string suffix and streams
+# bytes. This cap exists so that if it ever does leak, it is killed instead of the
+# server or the kernel picking its own victim on a 1 GB box.
+MemoryMax=256M
+
+# Read-only filesystem, with ONE exception: the client/token store. Everything else
+# this process touches (the venv, mcp.env) is read-only, and the secrets never reach
+# the disk at all.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadOnlyPaths=/data
+ReadWritePaths=/data/mcp/auth
+
+[Install]
+WantedBy=multi-user.target

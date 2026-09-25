@@ -10,8 +10,8 @@
 # inert.yaml included — so there is nothing to prune and nothing to add. The
 # folder name IS the inventory key IS the GCE instance name unless the host sets
 # `vm_dir` (mcp's folder is vm/mcp-vm/), and EVERY HOST HAS ONE: a host that
-# collects nothing (mcp) has a folder holding only install-otel.sh, inert.yaml
-# and its `instance` file. No folder is a refusal, not a fallback.
+# collects nothing still has install-otel.sh and inert.yaml there. No folder is
+# a refusal, not a fallback.
 
 - name: Look for this host's vm/ folder
   ansible.builtin.stat:
@@ -26,7 +26,7 @@
     fail_msg: >-
       There is no vm/{{ vm_dir | default(inventory_hostname) }}/ folder. Every
       host needs one — even a host that collects nothing gets install-otel.sh
-      and inert.yaml there (see vm/mcp-vm/).
+      and inert.yaml there.
     quiet: true
 
 - name: Assemble the file list

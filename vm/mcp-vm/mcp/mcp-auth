@@ -1,0 +1,46 @@
+#!/bin/bash
+# mcp-auth — start the OAuth gateway that fronts the graphify MCP server.
+#
+# Installed to /usr/local/bin/mcp-auth by build-ops/vm/mcp-vm/mcp.sh; ExecStart
+# of mcp-auth.service.
+#
+# Its whole reason to exist is the same as mcp-serve's: SECRETS. Four values have to
+# reach the gateway (the Google OAuth client id and secret, the JWT signing key and
+# graphify's own API key) and none of them may touch the disk or the command line.
+# This fetches each into a shell variable, exports it, and exec's the app — so they
+# live only in process memory and never appear in argv, where any local user's `ps`
+# would read them.
+#
+# `exec` matters: the app replaces this shell, so systemd supervises the real process
+# rather than a parent that would swallow its signals and exit status.
+#
+# NO `set -x` — this script handles secrets. See gcp-secret.
+set -euo pipefail
+
+source /etc/mcp/mcp.env
+
+# The Google OAuth client. Two secrets rather than one JSON blob, matching the
+# one-value-per-secret shape of every other secret this VM reads — no parsing, and a
+# malformed value fails at the API instead of in a jq expression. The id is not
+# itself sensitive; it is stored beside the secret so the pair is rotated together
+# and can never be mismatched.
+MCP_GOOGLE_CLIENT_ID="$(/usr/local/bin/gcp-secret "$MCP_GOOGLE_CLIENT_ID_SECRET")"
+MCP_GOOGLE_CLIENT_SECRET="$(/usr/local/bin/gcp-secret "$MCP_GOOGLE_CLIENT_SECRET_SECRET")"
+
+# Signs the tokens this gateway issues. NOT derived from the Google client secret
+# (which is FastMCP's default): deriving it would mean rotating the Google client
+# silently invalidates every issued token, turning a routine credential rotation into
+# an unexplained mass logout.
+MCP_JWT_SIGNING_KEY="$(/usr/local/bin/gcp-secret "$MCP_JWT_KEY_SECRET")"
+
+# graphify's own key. NO LONGER A USER-FACING CREDENTIAL — it is the loopback
+# password between this gateway and 127.0.0.1:8081, injected on every proxied
+# request. It must never be handed to a person again; a copy in someone's
+# ~/.claude.json is useless anyway, because graphify no longer listens on an address
+# the load balancer can reach.
+MCP_API_KEY="$(/usr/local/bin/gcp-secret "$MCP_API_KEY_SECRET")"
+
+export MCP_GOOGLE_CLIENT_ID MCP_GOOGLE_CLIENT_SECRET \
+       MCP_JWT_SIGNING_KEY MCP_API_KEY
+
+exec "$MCP_VENV/bin/python" /usr/local/bin/mcp_auth_app.py
