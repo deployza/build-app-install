@@ -146,7 +146,7 @@ so a VM with nothing pushed to it collects nothing and sends nowhere.
 > **It has never been run against a real VM.** Nothing here is exercised or
 > CI'd. Of the four inventory hosts only `ziniapps-vm` exists: the `mcp` VM was
 > deleted on 2026-09-26 (the next one is pushed with the same playbook), and
-> `deployza-vm` and `devops-vm` do not exist in Terraform yet.
+> `deployza-vm` and `ops-vm` do not exist in Terraform yet.
 >
 > **Deploying by hand, meanwhile:** clone this repo on the instance and run
 > `sudo bash vm/<vm>/install.sh <APP_ENV> [unit ...]`. Copying a loose script

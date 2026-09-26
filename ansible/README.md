@@ -1,6 +1,6 @@
 # `ansible/` — the pusher
 
-Runs on a **controller** (your laptop today, `devops-vm` later) and reaches
+Runs on a **controller** (your laptop today, `ops-vm` later) and reaches
 every VM over the IAP tunnel. Nothing in this folder is ever copied to a host.
 
 ```
@@ -34,7 +34,7 @@ ansible-playbook playbooks/site.yml --tags otel                       # every co
 ```
 
 From a laptop, override the identity — the inventory names the service account
-`devops-vm` will use:
+`ops-vm` will use:
 
 ```bash
 ansible-playbook playbooks/ziniapps-vm.yml -e ansible_user=you_deployza_com
@@ -88,4 +88,4 @@ sudo bash vm/ziniapps-vm/install-otel.sh                     # otel
 - **Dynamic inventory.** Four hosts do not need it yet.
 - **Any of it, against a real VM.** Nothing here has been exercised or CI'd.
   `ziniapps-vm` is the only inventory host that exists today: the `mcp` VM was
-  deleted on 2026-09-26, and `deployza-vm` and `devops-vm` are not built yet.
+  deleted on 2026-09-26, and `deployza-vm` and `ops-vm` are not built yet.

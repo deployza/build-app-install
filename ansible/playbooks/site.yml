@@ -15,4 +15,4 @@
 - import_playbook: mcp-vm.yml
 - import_playbook: ziniapps-vm.yml
 - import_playbook: deployza-vm.yml
-- import_playbook: devops-vm.yml
+- import_playbook: ops-vm.yml
