@@ -30,7 +30,7 @@ set -euxo pipefail
 log() { echo "[mcp-boot] $*"; }
 
 # DATA_DEV is only used when a disk IS attached — it must then match the
-# attached_disk device_name in build-terraform (builds/vms.tf). Normally no such
+# attached_disk device_name in build-terraform (dz-builds/vms.tf). Normally no such
 # disk exists. The rest match the paths in /etc/mcp/mcp.env.
 readonly DATA_DEV="/dev/disk/by-id/google-mcp-data"
 readonly DATA_MNT="/data"
@@ -150,7 +150,8 @@ setup_service_home() {
     # ON THE BOOT DISK, like the rest of /data. An image swap therefore discards
     # every registration and every issued token, and each developer logs in through
     # the browser once more. That is a re-login, not data loss, and it is the
-    # accepted cost of the single-disk design — see mcp.md's disk section.
+    # accepted cost of the single-disk design — see "Replace the VM" in
+    # build-terraform dz-builds/mcp.md.
     chmod 700 "$AUTH_DIR"
 }
 

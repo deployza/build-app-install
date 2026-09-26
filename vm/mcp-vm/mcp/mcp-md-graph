@@ -27,9 +27,8 @@
 # calls it directly and writes graphify's own node-link graph.json, so
 # `graphify global add` takes the result unmodified.
 #
-# This is what closes the "docs/config repo" gap in §1 of
-# build-terraform/docs/mcp.md (sibling repo) — README
-# and docs/ content is now queryable alongside the code it describes.
+# This is what makes README and docs/ content queryable alongside the code it
+# describes.
 #
 # IDEMPOTENCE IS THE WHOLE DESIGN, AND IT IS NOT OPTIONAL
 #

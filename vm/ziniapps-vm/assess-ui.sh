@@ -24,7 +24,7 @@ set -euo pipefail
 #
 # Requires the tomcat-mysql-nginx image (or any image whose install-nginx.sh has
 # run): this script writes into /etc/nginx/app.d/, the routing seam that image
-# bakes EMPTY on purpose. See build-vm-images/scripts/ubuntu/install-nginx.sh
+# bakes EMPTY on purpose. See build-vm-images/scripts/ubuntu/nginx/install-nginx.sh
 # and /etc/nginx/app.d/README on the VM itself.
 #
 # GCS layout (${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/):
@@ -65,7 +65,7 @@ set -euo pipefail
 #   * Pushed (the normal path): its output goes to wherever the pusher ran it —
 #     there is no systemd unit and no journal of its own. Capture it there.
 #   * Run manually over SSH: output goes to your terminal; capture with
-#       sudo bash apps/assess-ui/assess-ui.sh <APP_ENV> 2>&1 | tee /tmp/assess-ui.log
+#       sudo bash vm/ziniapps-vm/assess-ui.sh <APP_ENV> 2>&1 | tee /tmp/assess-ui.log
 #
 # This script only INSTALLS the files — they are then served by the separate
 # 'nginx' service, whose logs are elsewhere:

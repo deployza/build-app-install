@@ -4,7 +4,7 @@ Description=Hourly MCP knowledge-graph refresh
 [Timer]
 # First run shortly after boot. On a fresh VM this is what produces the very
 # first graph and lets mcp.service stop crash-looping; 2 minutes gives
-# the boot script time to mount /data and Cloud NAT time to come up.
+# mcp-boot time to set up /data and the network time to come up.
 OnBootSec=2min
 
 # Hourly thereafter, measured from the end of the last run rather than on a wall

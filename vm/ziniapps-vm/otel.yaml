@@ -56,7 +56,7 @@ receivers:
   # TOMCAT'S OWN LOGS ONLY — the container, not the applications inside it.
   # Tomcat forks via catalina.sh, so almost nothing of substance reaches the
   # journal; these files are the record. Paths are fixed by
-  # build-vm-images/install-tomcat.sh ($CATALINA_HOME=/home/tomcat/instance);
+  # build-vm-images/scripts/ubuntu/tomcat/install-tomcat.sh ($CATALINA_HOME=/home/tomcat/instance);
   # if that moves, this moves.
   #
   # THE `*/*.log` GLOB WAS DELIBERATELY REMOVED. It matched the per-app log

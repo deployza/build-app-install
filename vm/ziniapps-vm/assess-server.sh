@@ -3,7 +3,7 @@ set -euo pipefail
 
 # -----------------------------------------------------------------------------
 # assess-server.sh — app deploy script for the assess backend WAR. Invoked by
-# instances/ziniapps-vm/install.sh, the orchestrator that installs all three assess apps
+# vm/ziniapps-vm/install.sh, which installs all three assess apps
 # (server, ui, exam) onto the same Tomcat. It downloads the app's install FOLDER and
 # the WAR from GCS, provisions the MySQL DB/user, installs the per-webapp Tomcat
 # context (context.xml + properties + logback) into
@@ -16,10 +16,10 @@ set -euo pipefail
 # path except /nginx-health 404s until an app deploy script drops its own
 # location blocks in. Deploying the WAR alone therefore yields a working
 # :8080/<ctx> and a 404 on :80/<ctx>; write_nginx_conf is what closes that gap.
-# See build-vm-images/scripts/ubuntu/install-nginx.sh and, on the VM itself,
+# See build-vm-images/scripts/ubuntu/nginx/install-nginx.sh and, on the VM itself,
 # /etc/nginx/app.d/README.
 #
-# Contract: invoked as `assess-server.sh APP_ENV` (by instances/ziniapps-vm/install.sh).
+# Contract: invoked as `assess-server.sh APP_ENV` (by vm/ziniapps-vm/install.sh).
 # APP_NAME is fixed to "assess-server" here (the backend's GCS artifacts live
 # under gs://dz-builds/<env>/assess-server/); the single argument is
 # APP_ENV ("$1").
@@ -76,7 +76,7 @@ set -euo pipefail
 #   * Pushed (the normal path): its output goes to wherever the pusher ran it —
 #     there is no systemd unit and no journal of its own. Capture it there.
 #   * Run manually over SSH: output goes to your terminal; capture with
-#       sudo bash apps/assess-server/assess-server.sh <APP_ENV> 2>&1 | tee /tmp/assess-server.log
+#       sudo bash vm/ziniapps-vm/assess-server.sh <APP_ENV> 2>&1 | tee /tmp/assess-server.log
 #
 # This script only DEPLOYS the WAR — the app then runs inside the separate
 # 'tomcat' service, whose logs are elsewhere:

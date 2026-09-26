@@ -4,7 +4,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Container variant of assess-ui.sh.
 #
-# This is the DOCKER counterpart of vm/assess-ui.sh. It is intentionally a
+# This is the DOCKER counterpart of vm/ziniapps-vm/assess-ui.sh. It is intentionally a
 # separate copy, not a shared script (see build-docs / the split rationale):
 # the VM and container runtimes differ in ways that don't reduce to a flag.
 #
@@ -39,7 +39,7 @@ set -euo pipefail
 # The WAR is deployed under the stable name <ctx>.war, so it serves at /<ctx>
 # regardless of the versioned filename in install.war.
 #
-# Differences from vm/assess-ui.sh:
+# Differences from vm/ziniapps-vm/assess-ui.sh:
 #   - No `tomcat` service user. In the container image Tomcat runs as the
 #     container's main process (PID 1, as root); there is no separate 'tomcat'
 #     user/group, so every `chown tomcat:tomcat` / `install -o tomcat` from the

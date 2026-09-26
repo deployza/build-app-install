@@ -4,7 +4,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Container variant of assess-server.sh.
 #
-# This is the DOCKER counterpart of vm/assess-server.sh. It is intentionally a
+# This is the DOCKER counterpart of vm/ziniapps-vm/assess-server.sh. It is intentionally a
 # separate copy, not a shared script (see build-docs / the split rationale):
 # the VM and container runtimes differ in ways that don't reduce to a flag.
 #
@@ -52,7 +52,7 @@ set -euo pipefail
 # The WAR is deployed under the stable name <ctx>.war, so it serves at /<ctx>
 # regardless of the versioned filename in install.war.
 #
-# Differences from vm/assess-server.sh:
+# Differences from vm/ziniapps-vm/assess-server.sh:
 #   - No `tomcat` service user. In the container image Tomcat runs as the
 #     container's main process (PID 1, as root); there is no separate 'tomcat'
 #     user/group, so every `chown tomcat:tomcat` / `install -o tomcat` from the
@@ -63,7 +63,7 @@ set -euo pipefail
 #     then return. There is no systemd service to coordinate with, and no need to
 #     wait for a hot-deploy: Tomcat starts fresh right after and picks up whatever
 #     is in webapps.
-#   - Invoked by docker-startup.sh as `<APP_NAME>.sh APP_NAME APP_ENV`; it returns,
+#   - Invoked by docker-startup.sh as `<APP_NAME>.sh APP_ENV`; it returns,
 #     and the entrypoint then execs `catalina.sh run` to serve.
 # -----------------------------------------------------------------------------
 

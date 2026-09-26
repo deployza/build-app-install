@@ -13,7 +13,7 @@
 # break — don't introduce one.
 #
 # THERE ARE VM COPIES AT vm/<vm>/common.sh, and that is deliberate: each platform
-# folder is self-contained, the same way vm/<app>.sh and docker/<app>.sh are
+# folder is self-contained, the same way vm/<vm>/<app>.sh and docker/<app>.sh are
 # separate copies rather than one script behind a flag (CLAUDE.md, "vm/ vs.
 # docker/"). The price is that both values below also appear there — CHANGE THE
 # BUCKET IN BOTH OR THE TWO PLATFORMS PULL FROM DIFFERENT PLACES.

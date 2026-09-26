@@ -26,7 +26,7 @@ there is no token passthrough — the confused-deputy failure the spec calls out
 
 WHO IS ALLOWED: anyone with a deployza.com Google Workspace account. There is no group
 check and no allowlist — see WorkspaceDomainMiddleware below for what that does and does
-not buy, and build-terraform/docs/mcp-oauth-plan.md for why it was chosen.
+not buy.
 
 THE SERVICE IS CALLED "Deployza MCP" wherever a person sees it — the name clients list it
 under, the denial messages, the JSON at /. Not a bare "MCP", which is the name of the
@@ -225,7 +225,7 @@ def build_app(cfg: Config):
 
     # -----------------------------------------------------------------------
     # /healthz — unauthenticated, and the reason the load balancer's health check
-    # could finally move from TCP to HTTP (build-terraform builds/load-balancing.tf).
+    # could finally move from TCP to HTTP (build-terraform dz-builds/load-balancing.tf).
     #
     # The old TCP check proved only that something had port 8080 open. This proves
     # the gateway is running AND that graphify is listening behind it, which is the

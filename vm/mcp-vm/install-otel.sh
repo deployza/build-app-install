@@ -15,9 +15,7 @@ set -euo pipefail
 # differ (vm/mcp-vm/ is host `mcp`).
 #
 # THE CONFIG IS NOT ASSEMBLED. Each vm/<vm>/otel.yaml is the complete file —
-# receivers, processors, exporters, service — and is installed verbatim. This
-# replaced render.sh (which concatenated per-server receiver fragments with a
-# per-VM exporter.yaml and pipeline.yaml) on 2026-09-25.
+# receivers, processors, exporters, service — and is installed verbatim.
 #
 # WHAT THIS HAS TO GET RIGHT, in order:
 #

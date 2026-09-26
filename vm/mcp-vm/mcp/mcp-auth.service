@@ -31,7 +31,7 @@ Environment=HOME=/data/mcp
 
 # gcloud writes a credential cache to $HOME/.config/gcloud, and $HOME is on the
 # read-only /data below. Same trap that crash-looped mcp.service 213 times on first
-# deployment (build-terraform/docs/mcp.md §12) — PrivateTmp gives this unit its own
+# deployment — PrivateTmp gives this unit its own
 # tmpfs, so the cached token lives in memory and dies with the process.
 Environment=CLOUDSDK_CONFIG=/tmp/gcloud
 
@@ -42,7 +42,8 @@ RestartSec=10
 
 # Serving wins any CPU contention on the shared-core e2-micro, matching
 # mcp.service. mcp-refresh.service carries CPUWeight=20 so that a full re-index
-# yields to serving instead of starving it — the outage diagnosed in §12.
+# yields to serving instead of starving it — the 2026-08-27 outage noted in
+# mcp.service.
 CPUWeight=1000
 
 # The gateway holds no graph: it validates a JWT, checks a string suffix and streams

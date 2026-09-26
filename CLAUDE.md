@@ -14,7 +14,7 @@ Guidance for Claude Code when working in this repository.
 > **If that path does not exist, you have not cloned `build-docs` yet — stop and
 > clone it first** (it sits next to this repo under `Build/`):
 > ```bash
-> git clone https://github.com/deployza/build-ops.git
+> git clone https://github.com/deployza/build-docs.git
 > ```
 > Without it you are missing the cross-repo context (how this repo fits the
 > image / GCS-artifact / push flow).
@@ -144,9 +144,9 @@ so a VM with nothing pushed to it collects nothing and sends nowhere.
 > VM launcher for consistency.
 >
 > **It has never been run against a real VM.** Nothing here is exercised or
-> CI'd, `deployza-vm` and `devops-vm` do not exist in Terraform yet, and the
-> `roles/iap.tunnelResourceAccessor` gap in `config-iam/` blocks the tunnel to
-> `dz-ziniapps` until it is fixed.
+> CI'd. Of the four inventory hosts only `ziniapps-vm` exists: the `mcp` VM was
+> deleted on 2026-09-26 (the next one is pushed with the same playbook), and
+> `deployza-vm` and `devops-vm` do not exist in Terraform yet.
 >
 > **Deploying by hand, meanwhile:** clone this repo on the instance and run
 > `sudo bash vm/<vm>/install.sh <APP_ENV> [unit ...]`. Copying a loose script
@@ -160,7 +160,7 @@ ever copied to a host. See [`ansible/README.md`](ansible/README.md).
 
 - **It drives `vm/` only.** There is no `ansible/docker/` and there must not be.
 - **It carries and starts; the scripts decide.** `vm_push` (tagged `always`)
-  ships `vm/<vm>/` plus the four shared `vm/` files; `vm_unit` runs one unit.
+  ships the host's whole `vm/<vm>/` folder; `vm_unit` runs one unit.
 - **Every unit is a tag**: no tags runs them all in order, `--tags assess-exam`
   one, `--tags apps` every app, `--tags otel` the collector. Units that ship but
   must be asked for by name are tagged `never` (`hundi-ui`).
@@ -207,7 +207,7 @@ ziniapps sites (plus `hundi-ui`, present but never deployed); `deployza-vm` runs
 
 **`mcp` is neither model.** It is the only app with no Tomcat and no nginx: it
 installs the Deployza MCP server (graphify + the OAuth gateway + the hourly
-refresh) as systemd units into the venv the `mcp` image bakes. Its payload —
+refresh) as systemd units into the venv the `dz-mcp` image bakes. Its payload —
 units, helpers, `mcp.env`, two Python modules — sits in `vm/mcp-vm/mcp/` and
 is installed verbatim; it reads nothing from GCS, so `APP_ENV` selects nothing,
 as with `www-apidocs`. It runs pre-flight checks against the baked venv before
@@ -215,11 +215,12 @@ it replaces anything. See the header of `vm/mcp-vm/mcp.sh`.
 
 ## The deploy contract
 
-- **`install.properties` (in the GCS `conf/` folder) is the single source of
-  truth.** The script derives **nothing** on its own — every value (WAR filename,
-  `CATALINA_HOME`, context path, app-properties/logback filenames, DB
-  name/user/password, MySQL root creds) is read from it. Key list is documented in
-  the header comment of each script and in `build-docs/ops-deployment.md` §1.
+- **`install.properties` (in the app's GCS `install/` folder; the `docker/`
+  scripts still read `conf/`) is the single source of truth.** The script
+  derives **nothing** on its own — every value (WAR filename, `CATALINA_HOME`,
+  context path, app-properties/logback filenames, DB name/user/password, MySQL
+  root creds) is read from it. Key list is documented in the header comment of
+  each script and in `build-docs/ops-deployment.md` §1.
 - Conf files are installed **verbatim** — absolute paths inside `<ctx>.xml` must
   already match `install.catalina.home`.
 - The WAR is staged under its real versioned filename but **deployed as
@@ -300,7 +301,7 @@ the whole folder, not the file.
   matching line wins; surrounding quotes stripped). Use `require_prop` for keys
   that must be non-empty; only `install.mysql.root.password` may be empty.
 - **No secrets in this repo — ever.** Every sensitive value comes from the GCS
-  `conf/install.properties` at deploy time. This repo is safe to keep public.
+  `install/install.properties` at deploy time. This repo is safe to keep public.
 
 ## When adding a new app
 
@@ -315,7 +316,7 @@ the whole folder, not the file.
    app's installer; the unit is resolved by filename). Keep the `source` line
    (`common.sh`, beside the script, on both platforms) — do not re-declare `GCS_BASE_URL`,
    `STAGE_ROOT` or the `NGINX_*` constants locally.
-3. Ensure the app's `conf/` (incl. `install.properties`) + WAR are published to
+3. Ensure the app's `install/` (incl. `install.properties`) + WAR are published to
    `gs://dz-builds/<env>/<app>/`.
 4. If it should be collected as its own service, add its `filelog/<app>`
    receiver, `resource/<app>` processor and `logs/<app>` pipeline to

@@ -3,7 +3,7 @@ Description=MCP knowledge-graph refresh - fetch changed repos, rescan, merge
 After=network-online.target
 Wants=network-online.target
 
-# Writes the clones, the graphs and the watermark, all on the data disk.
+# Writes the clones, the graphs and the watermark, all under /data.
 Requires=mcp-boot.service
 After=mcp-boot.service
 
@@ -19,7 +19,7 @@ Group=mcp
 EnvironmentFile=/etc/mcp/mcp.env
 Environment=HOME=/data/mcp
 
-# Keep gcloud's credential cache and logs off the data disk. /data IS writable for
+# Keep gcloud's credential cache and logs out of /data. /data IS writable for
 # this unit (unlike mcp.service), so this is hygiene rather than a fix —
 # but it keeps both units behaving identically and stops gcloud littering the
 # volume that holds the graph.

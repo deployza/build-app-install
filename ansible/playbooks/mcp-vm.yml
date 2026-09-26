@@ -1,6 +1,9 @@
 ---
 # mcp-vm — the MCP server in dz-builds, inventory host `mcp`, folder vm/mcp-vm/.
 #
+# THERE IS NO mcp VM TODAY (deleted 2026-09-26). This playbook fails at the
+# tunnel until the next one exists; it is still how that VM gets its app.
+#
 # TWO UNITS, in vm/mcp-vm/install.sh's order:
 #
 #   mcp    the app: graphify's units, the OAuth gateway, the refresh, mcp.env.

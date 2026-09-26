@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Container variant of vm/www-website.sh — DELIBERATELY UNIMPLEMENTED.
+# Container variant of vm/deployza-vm/www-website.sh — DELIBERATELY UNIMPLEMENTED.
 #
 # www-website has no Docker image / build target today: it ships only on the
 # `nginx` GCE image (build-vm-images/images/ubuntu/nginx/), deployed by
-# vm/www-website.sh. This repo's own "when adding a new app" checklist calls
-# for a docker/<app>.sh sibling for every vm/<app>.sh, so this file exists to
+# vm/deployza-vm/www-website.sh. This repo's own "when adding a new app" checklist calls
+# for a docker/<app>.sh sibling for every vm/<vm>/<app>.sh, so this file exists to
 # keep that contract honest — as an explicit, loud stub rather than a silent
 # gap or a guessed implementation with no Docker image to actually test it
 # against.
@@ -16,8 +16,8 @@ set -euo pipefail
 # docker/<APP_NAME>.sh inside a www-website container image, and no such image
 # exists. If one is ever built, replace this stub with a real deploy script —
 # most likely modeled on hundi-ui.sh/assess-ui.sh's "static WAR, no database"
-# shape. vm/www-website.sh is now a plain per-HOST static site again — the API
-# docs it used to carry are a separate app (vm/www-apidocs.sh, whose own docker
+# shape. vm/deployza-vm/www-website.sh is now a plain per-HOST static site again — the API
+# docs it used to carry are a separate app (vm/deployza-vm/www-apidocs.sh, whose own docker
 # stub sits beside this one), so there is nothing extra to port.
 # -----------------------------------------------------------------------------
 

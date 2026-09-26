@@ -3,8 +3,8 @@ set -euo pipefail
 
 # -----------------------------------------------------------------------------
 # www-website.sh — app deploy script for the marketing site at
-# www.deployza.com. Run as a child of instances/deployza-vm/install.sh (the <APP_NAME>.sh that
-# pushed to the VM and run there), and standalone over SSH.
+# www.deployza.com. Run as a unit of vm/deployza-vm/install.sh (pushed to the VM
+# and run there), and standalone over SSH.
 #
 # www-website is a STATIC site (no database, no app.properties, no logback, no
 # Tomcat), packaged as a WAR only because that is what its Maven build produces.
@@ -29,7 +29,7 @@ set -euo pipefail
 # systemd unit and its own location blocks in /etc/nginx/app.d/. The two share
 # nothing but a hostname — different content, different source (a GCS artifact
 # vs. a git checkout built on the VM), different update trigger (a WAR release
-# vs. a docs commit). instances/deployza-vm/install.sh runs both.
+# vs. a docs commit). vm/deployza-vm/install.sh runs both.
 #
 # WHAT THIS SCRIPT STILL OWES THE DOCS is one line in the server block it
 # generates: `include /etc/nginx/app.d/*.conf;` (see write_nginx_conf). Once a
@@ -40,7 +40,7 @@ set -euo pipefail
 # 404s /api-docs/ while this script's own `nginx -t` still passes.
 #
 # Ordering between the two scripts is NOT load-bearing: nginx resolves that
-# include at reload time, not at write time. instances/deployza-vm/install.sh runs this one first
+# include at reload time, not at write time. vm/deployza-vm/install.sh runs this one first
 # anyway, so every reload along the way tests a complete config.
 #
 # Whole-site no-cache: EVERY response this block itself serves carries
@@ -88,11 +88,11 @@ set -euo pipefail
 #
 # Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
 # unit. Where its output lands depends on how it is invoked:
-#   * Pushed (the normal path, via instances/deployza-vm/install.sh): its output goes to wherever
+#   * Pushed (the normal path, via vm/deployza-vm/install.sh): its output goes to wherever
 #     the pusher ran it — no systemd unit, no journal of its own.
-#     instances/deployza-vm/install.sh also tees a per-child copy to /tmp/deployza/logs/.
+#     vm/deployza-vm/install.sh also tees a per-unit copy to /tmp/deployza/logs/.
 #   * Run manually over SSH: output goes to your terminal; capture with
-#       sudo bash apps/www-website/www-website.sh <APP_ENV> 2>&1 | tee /tmp/www-website.log
+#       sudo bash vm/deployza-vm/www-website.sh <APP_ENV> 2>&1 | tee /tmp/www-website.log
 #
 # This script only INSTALLS the files — they are then served by the separate
 # 'nginx' service, whose logs are elsewhere:

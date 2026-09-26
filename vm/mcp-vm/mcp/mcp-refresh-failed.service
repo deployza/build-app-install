@@ -4,6 +4,6 @@ Description=Report a failed MCP refresh to Cloud Logging
 [Service]
 Type=oneshot
 
-# Runs as root, not as the graphify user: it writes to Cloud Logging using the
+# Runs as root, not as the mcp user: it writes to Cloud Logging using the
 # VM service account via gcloud, and needs no access to /data at all.
 ExecStart=/usr/local/bin/mcp-log-failure

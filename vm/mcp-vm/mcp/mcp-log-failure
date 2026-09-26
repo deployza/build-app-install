@@ -14,13 +14,14 @@
 # The Ops Agent is deliberately NOT installed on this VM (it would spend memory
 # that the 1 GB e2-micro budget does not have to spare), so journald does not
 # reach Cloud Logging on its own. This writes the one entry that matters directly
-# through the Logging API instead, using the VM service account's
-# roles/logging.logWriter.
+# through the Logging API instead. That needs roles/logging.logWriter on the VM
+# service account, which mcp-vm-sa does NOT hold today — see build-terraform
+# dz-builds/mcp.md §5.
 #
 # TO ALERT ON IT: create a log-based alerting policy in Cloud Monitoring for
 #   logName="projects/<project>/logs/mcp-refresh" AND severity>=ERROR
-# That policy is not codified in Terraform yet — see the open items in
-# build-terraform/builds/mcp-tracker.md.
+# That policy is not codified in Terraform yet — see build-terraform
+# dz-builds/mcp.md §7, limit 8.
 set -euo pipefail
 
 project="$(curl -fsS --max-time 5 -H 'Metadata-Flavor: Google' \

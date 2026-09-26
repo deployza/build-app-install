@@ -63,7 +63,7 @@ set -euo pipefail
 # configuration is ./mcp/mcp.env. It stays mandatory so this script obeys the same
 # contract as every other unit.
 #
-# Requires the `mcp` image (build-vm-images/images/ubuntu/mcp/): the venv, plus
+# Requires the `mcp` image (family dz-mcp, build-vm-images/images/ubuntu/mcp/): the venv, plus
 # git, jq, curl and gcloud from the baseline installers. Also works on an image
 # that predates 1-3 — those bake the same venv, and this overwrites their baked
 # copies of the files above in place.

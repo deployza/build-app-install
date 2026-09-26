@@ -6,7 +6,8 @@
 # not tunnel to itself. ClickHouse, Grafana and Semaphore are configured by a
 # different push shape, which this repo does not own.
 #
-# Neither the instance nor its image exists yet. When it does and it needs a
+# The instance does not exist yet (its image family, dz-ops, does). When it
+# does and it needs a
 # collector, give it vm/devops-vm/otel.yaml and add the same two lines mcp-vm.yml
 # has: vm_push, then vm_unit otel.
 - name: devops-vm

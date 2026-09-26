@@ -91,7 +91,7 @@ set -euo pipefail
 #   * Pushed (the normal path): its output goes to wherever the pusher ran it —
 #     there is no systemd unit and no journal of its own. Capture it there.
 #   * Run manually over SSH: output goes to your terminal; capture with
-#       sudo bash apps/ziniapps-go/ziniapps-go.sh <APP_ENV> 2>&1 | tee /tmp/ziniapps-go.log
+#       sudo bash vm/ziniapps-vm/ziniapps-go.sh <APP_ENV> 2>&1 | tee /tmp/ziniapps-go.log
 #
 # This script only INSTALLS the files — they are then served by the separate
 # 'nginx' service, whose logs are elsewhere:

@@ -45,7 +45,7 @@ set -euo pipefail
 #   * Pushed (the normal path): its output goes to wherever the pusher ran it —
 #     there is no systemd unit and no journal of its own. Capture it there.
 #   * Run manually over SSH: output goes to your terminal; capture with
-#       sudo bash apps/hundi-ui/hundi-ui.sh <APP_ENV> 2>&1 | tee /tmp/hundi-ui.log
+#       sudo bash vm/ziniapps-vm/hundi-ui.sh <APP_ENV> 2>&1 | tee /tmp/hundi-ui.log
 #
 # This script only DEPLOYS the WAR — the app then runs inside the separate
 # 'tomcat' service, whose logs are elsewhere:

@@ -55,7 +55,7 @@
 # install/ (or conf/) folder and WAR live under
 # ${GCS_BASE_URL}/${APP_ENV}/${APP_NAME}/.
 #
-# The bucket is read by the VM's compute service account — a new bucket needs
+# The bucket is read by the VM's attached service account — a new bucket needs
 # an IAM grant in build-terraform before a host can pull from it. KEEP IN SYNC
 # WITH docker/common.sh.
 readonly GCS_BASE_URL="gs://dz-builds"

@@ -2,17 +2,17 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Container variant of vm/www-apidocs.sh — DELIBERATELY UNIMPLEMENTED.
+# Container variant of vm/deployza-vm/www-apidocs.sh — DELIBERATELY UNIMPLEMENTED.
 #
 # www-apidocs has no Docker image / build target today, and unlike the other
 # stubs here it is not obvious that it ever should have one: it is not an app
 # at all in the Tomcat sense. It is an nginx location block plus a systemd
 # oneshot that clones github.com/deployza/www-apidocs and runs `mkdocs build`
-# on the host — see vm/www-apidocs.sh. None of that has a meaning inside an app
+# on the host — see vm/deployza-vm/www-apidocs.sh. None of that has a meaning inside an app
 # container, which runs Tomcat as PID 1 with no nginx and no systemd.
 #
 # This file exists to keep this repo's own "when adding a new app" checklist
-# honest (a docker/<app>.sh sibling for every vm/<app>.sh), as an explicit, loud
+# honest (a docker/<app>.sh sibling for every vm/<vm>/<app>.sh), as an explicit, loud
 # stub rather than a silent gap or a guessed implementation with no Docker image
 # to test it against. Its sibling docker/www-website.sh is a stub for the same
 # reason.

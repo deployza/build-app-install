@@ -10,7 +10,7 @@
 # https://x-access-token:<pat>@github.com/org/repo.git — is the usual shortcut and
 # it leaks twice: the URL lands in the process command line where any local user's
 # `ps` can read it, and git then PERSISTS it into <clone>/.git/config, so the
-# token ends up written to the data disk in ~200 places. An askpass helper keeps
+# token ends up written to /data in ~200 places. An askpass helper keeps
 # it in one process's environment and nowhere else.
 #
 # NO `set -x` — see gcp-secret. This script prints the secret.

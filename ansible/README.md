@@ -10,7 +10,7 @@ ansible/
 ├── playbooks/<vm>.yml   one per VM: one role line per UNIT, each its own tag
 ├── playbooks/site.yml   every VM, in order
 └── roles/
-    ├── vm_push          ship vm/<vm>/ + the shared vm/ files, once per run
+    ├── vm_push          ship the host's vm/<vm>/ folder, once per run
     └── vm_unit          run one unit on the host
 ```
 
@@ -86,6 +86,6 @@ sudo bash vm/ziniapps-vm/install-otel.sh                     # otel
 - **Secrets.** None in this folder and none may be added. They come from Secret
   Manager at run time; Pub/Sub needs no credential at all.
 - **Dynamic inventory.** Four hosts do not need it yet.
-- **Any of it, against a real VM.** Nothing here has been exercised or CI'd, and
-  the `roles/iap.tunnelResourceAccessor` gap in `config-iam/` blocks the tunnel
-  to `dz-ziniapps` until it is fixed.
+- **Any of it, against a real VM.** Nothing here has been exercised or CI'd.
+  `ziniapps-vm` is the only inventory host that exists today: the `mcp` VM was
+  deleted on 2026-09-26, and `deployza-vm` and `devops-vm` are not built yet.

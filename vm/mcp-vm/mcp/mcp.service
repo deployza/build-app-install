@@ -4,10 +4,10 @@ Documentation=https://github.com/Graphify-Labs/graphify
 After=network-online.target
 Wants=network-online.target
 
-# The graph and the service user's HOME both live on the data disk, which
-# mcp-boot mounts. Requires= (not Wants=) because there is nothing useful
-# this server can do without it: if the disk cannot be mounted, failing to start
-# is the correct outcome, not serving an empty or boot-disk graph.
+# The graph and the service user's HOME both live under /data, which
+# mcp-boot provisions. Requires= (not Wants=) because there is nothing useful
+# this server can do without it: if /data cannot be provisioned, failing to start
+# is the correct outcome, not serving an empty graph.
 Requires=mcp-boot.service
 After=mcp-boot.service
 
@@ -51,7 +51,7 @@ RestartSec=30
 # 165-repo re-index exhausted the e2-micro's burst credits for 13.5 minutes; the
 # server stayed alive the whole time but was too starved to answer the load
 # balancer's health check, so the LB dropped it and mcp.deployza.com returned 000.
-# See build-terraform/docs/mcp.md §12. Under cgroup v2 this is one line per unit.
+# Under cgroup v2 this is one line per unit.
 CPUWeight=1000
 
 # The process reads two things (the graph, and the key from Secret Manager) and

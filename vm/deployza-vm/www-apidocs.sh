@@ -10,7 +10,7 @@ set -euo pipefail
 # at a path under it. They share nothing but a hostname — different content,
 # different source (a GCS artifact vs. a git checkout built on this VM),
 # different update trigger (a WAR release vs. a docs commit) — so they are now
-# two scripts, run together by instances/deployza-vm/install.sh.
+# two scripts, run together by vm/deployza-vm/install.sh.
 #
 # THIS IS A per-PATH APP (see this repo's CLAUDE.md — "Two kinds of app"): it
 # writes BARE LOCATION BLOCKS to /etc/nginx/app.d/, never a server{} block. The
@@ -20,7 +20,7 @@ set -euo pipefail
 # neither overwrites the other.
 #
 # Ordering is NOT load-bearing: nginx resolves the app.d include at reload time,
-# not at write time, so either script may run first. instances/deployza-vm/install.sh runs the
+# not at write time, so either script may run first. vm/deployza-vm/install.sh runs the
 # site first anyway, so that every reload along the way tests a complete config.
 #
 # WHAT THIS SCRIPT DEPLOYS — AND WHERE IT COMES FROM
@@ -34,12 +34,10 @@ set -euo pipefail
 # required even though it selects nothing.
 #
 # This REPLACED an earlier design where Cloud Build ran `mkdocs build` and
-# published `site/` to GCS for this VM to `gsutil rsync` down — see
-# build-vm-images/docs/apidocs-vm-build-plan.md for why: it cuts out a hop, at
-# the cost of this VM needing outbound internet (an egress-only external IP,
-# build-terraform/website/vms.tf) and read access to a GitHub PAT (Secret
-# Manager, cross-project grant — see fetch_github_pat in the generated
-# docs-refresh script). www-apidocs' own Cloud Build pipeline is gone as of this
+# published `site/` to GCS for this VM to `gsutil rsync` down. It cuts out a
+# hop, at the cost of this VM needing outbound internet and read access to a
+# GitHub PAT (Secret Manager, cross-project grant — see fetch_github_pat in the
+# generated docs-refresh script). www-apidocs' own Cloud Build pipeline is gone as of this
 # design; nothing publishes to GCS for this path anymore.
 #
 # What this script does:
@@ -69,11 +67,11 @@ set -euo pipefail
 #
 # Logs — this script only echoes to stdout/stderr; it is NOT its own systemd
 # unit. Where its output lands depends on how it is invoked:
-#   * Pushed (the normal path, via instances/deployza-vm/install.sh): its output goes to wherever
+#   * Pushed (the normal path, via vm/deployza-vm/install.sh): its output goes to wherever
 #     the pusher ran it — no systemd unit, no journal of its own.
-#     instances/deployza-vm/install.sh also tees a per-child copy to /tmp/deployza/logs/.
+#     vm/deployza-vm/install.sh also tees a per-unit copy to /tmp/deployza/logs/.
 #   * Run manually over SSH: output goes to your terminal; capture with
-#       sudo bash apps/www-apidocs/www-apidocs.sh <APP_ENV> 2>&1 | tee /tmp/www-apidocs.log
+#       sudo bash vm/deployza-vm/www-apidocs.sh <APP_ENV> 2>&1 | tee /tmp/www-apidocs.log
 #
 # This script only INSTALLS — the docs are then served by the separate 'nginx'
 # service and rebuilt by the separate 'docs-refresh' service, whose logs are
@@ -136,16 +134,15 @@ readonly DOCS_SRC_DIR="/var/www/.www-apidocs-src"
 readonly MKDOCS_VENV="/opt/mkdocs/venv"
 
 # Secret Manager id + PROJECT of the read-only GitHub PAT docs-refresh clones
-# with. Shared with the `mcp` flavor's own PAT (build-terraform's
-# builds/secrets.tf, secret id `github-readonly-pat` — renamed from
-# `mcp-github-pat` now that it's not mcp-only) rather than minting a second one
-# — see build-vm-images/docs/apidocs-vm-build-plan.md. It lives in
-# tools-tech-463909, a different project than this VM's own
-# (www-website-460108), so the project must be named explicitly; gcp-secret's
-# metadata-server trick (read the CALLING VM's own project) does not apply to a
-# cross-project secret. Reading it requires the per-secret grant in
-# build-terraform's builds/secrets.tf — without it this fails closed with a 403,
-# not silently.
+# with. Shared with mcp's own PAT (build-terraform's dz-builds/secrets.tf,
+# secret id `github-readonly-pat` — renamed from `mcp-github-pat` when it was
+# shared) rather than minting a second one. It lives in dz-builds, a different
+# project than this VM's own (dz-api-host), so the project must be named
+# explicitly; gcp-secret's metadata-server trick (read the CALLING VM's own
+# project) does not apply to a cross-project secret. Reading it requires a
+# per-secret grant in build-terraform's dz-builds/secrets.tf, which does not
+# exist yet — without it this fails closed with a 403, not silently.
+# GITHUB_PAT_PROJECT below still names the deleted tools-tech-463909 project.
 readonly GITHUB_PAT_SECRET="github-readonly-pat"
 readonly GITHUB_PAT_PROJECT="tools-tech-463909"
 
@@ -167,8 +164,8 @@ APP_ENV=""              # the single positional argument ("$1"): dev/production
 # APP_ENV is required but, uniquely in this folder, selects NOTHING: there are
 # no per-environment artifacts for this app (no GCS folder at all) and the docs
 # always come from `main`. It stays mandatory rather than optional so this
-# script obeys the same contract as every sibling and can sit in any
-# orchestrator's CHILD_SCRIPTS without a special case.
+# script obeys the same contract as every sibling and can sit in any host's
+# UNITS without a special case.
 parse_args() {
   APP_ENV="${1:-}"
   if [[ -z "$APP_ENV" ]]; then
@@ -249,8 +246,8 @@ prepare_docs_root() {
 # (refresh_docs_now, called from main() below), the same "deploy-time-only,
 # re-run to update" model every app here follows (ops-deployment.md §2/§5: push
 # new content, then re-run the deploy on the box). Updating the docs later —
-# without a full redeploy — means either re-running the orchestrator
-# (`sudo bash instances/deployza-vm/install.sh <APP_ENV>`) or `sudo systemctl start
+# without a full redeploy — means either re-running the unit
+# (`sudo bash vm/deployza-vm/install.sh <APP_ENV> www-apidocs`) or `sudo systemctl start
 # docs-refresh.service` directly, the latter being strictly cheaper since it
 # skips the nginx steps entirely.
 #
@@ -259,7 +256,7 @@ prepare_docs_root() {
 # and a heredoc'd ExecStart of that size is unreadable and hard to shellcheck.
 # Written to /usr/local/bin rather than baked into the image, matching this
 # repo's own split (build-vm-images bakes the toolchain; deploy scripts own
-# deploy logic) — see build-vm-images/docs/apidocs-vm-build-plan.md.
+# deploy logic).
 #
 # These are WHOLE files this script owns outright — writing the same content
 # again is naturally a no-op, so no marker file is needed and `daemon-reload` is
@@ -499,8 +496,8 @@ reload_nginx() {
 # this script's own `set -euo pipefail` an unguarded `systemctl start --wait`
 # would then abort the run. Ordering it last means there is nothing left to
 # abort here; keeping it non-fatal additionally means this script still exits 0,
-# so an orchestrator's `set -e` does not stop the remaining children over a docs
-# build (see instances/deployza-vm/install.sh). The routing is already live by this point — a
+# so install.sh does not stop the remaining units over a docs build (see
+# vm/deployza-vm/units.sh). The routing is already live by this point — a
 # failed build just means ${DOCS_ROOT} still holds the last good site, or, on a
 # first deploy, nothing yet and ${DOCS_URL_PREFIX}/ 404s.
 refresh_docs_now() {
